@@ -411,6 +411,7 @@ def update_sales():
     except Exception as e:
         print(f"ERRORE CRITICO GSheets: {e}")
         return
+
     if start_index == 0:
         print("Avvio nuova sessione...")
         main_records = main_sheet.get_all_records()
@@ -422,27 +423,41 @@ def update_sales():
                 if key not in pairs_map: pairs_map[key] = {"slug": slug, "rarity": rarity.lower(), "name": record.get("Player Name")}
         continuation_data['pairs_to_process'] = list(pairs_map.values())
         print("Leggo lo storico vendite esistente...")
-        continuation_data['existing_sales_map'] = { f"{rec.get('Player API Slug')}::{rec.get('Rarity Searched')}": {"row_index": i + 2, "record": rec} for i, rec in enumerate(sales_sheet.get_all_records()) }
-    pairs_to_process, existing_sales_map = continuation_data.get('pairs_to_process', []), continuation_data.get('existing_sales_map', {})
+        try:
+            continuation_data['existing_sales_map'] = { f"{rec.get('Player API Slug')}::{rec.get('Rarity Searched')}": {"row_index": i + 2, "record": rec} for i, rec in enumerate(sales_sheet.get_all_records()) }
+        except gspread.exceptions.GSpreadException as e:
+            print(f"Attenzione: il foglio '{SALES_HISTORY_SHEET_NAME}' sembra vuoto o malformato. Verrà trattato come vuoto. Dettagli: {e}")
+            continuation_data['existing_sales_map'] = {}
+
+    pairs_to_process = continuation_data.get('pairs_to_process', [])
+    existing_sales_map = continuation_data.get('existing_sales_map', {})
+
     updates_to_batch = []
+    new_rows_to_append = []
+
     for i in range(start_index, len(pairs_to_process)):
         if time.time() - start_time > 300:
             print(f"Timeout imminente. Salvo stato all'indice {i}.")
-            continuation_data['last_index'], continuation_data['existing_sales_map'] = i, existing_sales_map
+            continuation_data['last_index'] = i
             state['update_sales_continuation'] = continuation_data
             save_state(state)
+            # Esegui gli aggiornamenti raccolti prima di uscire
             if updates_to_batch: sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
+            if new_rows_to_append: sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
             return
+
         pair = pairs_to_process[i]
         key = f"{pair['slug']}::{pair['rarity']}"
         print(f"Processo ({i+1}/{len(pairs_to_process)}): {key}")
         existing_info = existing_sales_map.get(key)
         sales_to_fetch = MAX_SALES_FROM_API if existing_info else INITIAL_SALES_FETCH_COUNT
+
         api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {"playerSlug": pair['slug'], "rarity": pair['rarity'], "limit": sales_to_fetch})
         new_sales_from_api = []
         if api_data and api_data.get("data") and not api_data.get("errors"):
             for sale in api_data["data"].get("tokens", {}).get("tokenPrices", []):
                 new_sales_from_api.append({"timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000, "price": sale['amounts']['eurCents'] / 100, "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"})
+
         old_sales_from_sheet = []
         if existing_info:
             record = existing_info['record']
@@ -452,7 +467,9 @@ def update_sales():
                     try:
                         old_sales_from_sheet.append({"timestamp": datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000, "price": float(str(price_val).replace(",", ".")), "seasonEligibility": record.get(f"Sale {j} Eligibility")})
                     except (ValueError, TypeError): continue
+
         combined_sales = sorted(list({int(s['timestamp']): s for s in old_sales_from_sheet + new_sales_from_api}.values()), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
+
         headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
         if not headers:
              exp_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
@@ -462,14 +479,26 @@ def update_sales():
              exp_headers.append("Last Updated")
              sales_sheet.update('A1', [exp_headers])
              headers = exp_headers
+
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
-        row_to_update = existing_info['row_index'] if existing_info else sales_sheet.row_count + len(updates_to_batch) + 1
-        updates_to_batch.append({'range': f'A{row_to_update}', 'values': [updated_row]})
-        if not existing_info: existing_sales_map[key] = {"row_index": row_to_update, "record": {headers[i]: updated_row[i] for i in range(len(headers))}}
+
+        if existing_info:
+            updates_to_batch.append({'range': f'A{existing_info["row_index"]}', 'values': [updated_row]})
+        else:
+            new_rows_to_append.append(updated_row)
+            # Aggiungi una placeholder per evitare di riprocessare nello stesso ciclo
+            existing_sales_map[key] = {'row_index': 'new'}
+
         time.sleep(1)
+
     if updates_to_batch:
-        print(f"Invio {len(updates_to_batch)} aggiornamenti a 'Cronologia Vendite'...")
+        print(f"Invio {len(updates_to_batch)} aggiornamenti a '{SALES_HISTORY_SHEET_NAME}'...")
         sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
+
+    if new_rows_to_append:
+        print(f"Aggiunta di {len(new_rows_to_append)} nuove righe a '{SALES_HISTORY_SHEET_NAME}'...")
+        sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
+
     print("Esecuzione completata.")
     if 'update_sales_continuation' in state: del state['update_sales_continuation']
     save_state(state)
