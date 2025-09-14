@@ -330,14 +330,25 @@ def update_cards():
         cards_to_process = []
         for i, record in enumerate(all_sheet_records):
             record['row_index'] = i + 2
+
+            # Decide se la carta necessita di un aggiornamento
+            needs_update = False
+            projection_grade = record.get('Projection Grade', '').strip()
             last_update_str = record.get('Ultimo Aggiornamento', '').strip()
-            if not last_update_str:
-                cards_to_process.append(record)
-                continue
-            try:
-                if datetime.strptime(last_update_str, '%Y-%m-%d %H:%M:%S') < cutoff_time:
-                    cards_to_process.append(record)
-            except ValueError:
+
+            if not last_update_str or not projection_grade:
+                # Forza l'aggiornamento se non è mai stato fatto o se le proiezioni mancano
+                needs_update = True
+            else:
+                try:
+                    # Altrimenti, aggiorna se il timestamp è più vecchio del cutoff
+                    if datetime.strptime(last_update_str, '%Y-%m-%d %H:%M:%S') < cutoff_time:
+                        needs_update = True
+                except ValueError:
+                    # Forza l'aggiornamento se il timestamp è malformato
+                    needs_update = True
+
+            if needs_update:
                 cards_to_process.append(record)
         print(f"Identificate {len(cards_to_process)} carte da aggiornare.")
         continuation_data['cards_to_process'] = cards_to_process
