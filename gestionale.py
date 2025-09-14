@@ -4,7 +4,7 @@ import sys
 import requests
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import gspread
 
 # --- 1. CONFIGURAZIONE ---
@@ -17,8 +17,12 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 API_URL = "https://api.sorare.com/graphql"
 MAIN_SHEET_NAME = "Foglio1"
+SALES_HISTORY_SHEET_NAME = "Cronologia Vendite"
 STATE_FILE = "state.json"
 BATCH_SIZE = 15
+MAX_SALES_TO_DISPLAY = 100
+MAX_SALES_FROM_API = 7
+INITIAL_SALES_FETCH_COUNT = 20
 
 MAIN_SHEET_HEADERS = [
     "Slug", "Rarity", "Player Name", "Player API Slug", "Position", "U23 Eligible?", "Livello", "In Season?", 
@@ -31,7 +35,6 @@ MAIN_SHEET_HEADERS = [
 ]
 
 # --- 2. QUERY GRAPHQL ---
-# --- [CORREZIONE DEFINITIVA] Aggiunti i frammenti inline "... on Card" e "... on Player" ---
 ALL_CARDS_QUERY = """
     query AllCardsFromUser($userSlug: String!, $rarities: [Rarity!], $cursor: String) {
         user(slug: $userSlug) {
@@ -41,14 +44,7 @@ ALL_CARDS_QUERY = """
                         slug
                         rarity
                         ownerSince
-                        player {
-                            ... on Player {
-                                displayName
-                                slug
-                                position
-                                u23Eligible
-                            }
-                        }
+                        player { ... on Player { displayName, slug, position, u23Eligible } }
                     }
                 }
                 pageInfo { endCursor, hasNextPage }
@@ -56,8 +52,19 @@ ALL_CARDS_QUERY = """
         }
     }
 """
+PLAYER_TOKEN_PRICES_QUERY = """
+    query GetPlayerTokenPrices($playerSlug: String!, $rarity: String!, $limit: Int!) {
+        tokens {
+            tokenPrices(playerSlug: $playerSlug, rarity: $rarity, first: $limit, includePrivateSales: true) {
+                amounts { eurCents }
+                date
+                card { inSeasonEligible }
+            }
+        }
+    }
+"""
 
-# --- 3. FUNZIONI HELPER DI BASE ---
+# --- 3. FUNZIONI HELPER ---
 def load_state():
     try:
         with open(STATE_FILE, "r") as f: return json.load(f)
@@ -69,15 +76,12 @@ def save_state(state_data):
 def sorare_graphql_fetch(query, variables={}):
     payload = {"query": query, "variables": variables}
     headers = {
-        "APIKEY": SORARE_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "APIKEY": SORARE_API_KEY, "Content-Type": "application/json", "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "X-Sorare-ApiVersion": "v1"
+        "Accept-Language": "en-US,en;q=0.9", "X-Sorare-ApiVersion": "v1"
     }
     try:
-        response = requests.post(API_URL, json=payload, headers=headers, timeout=20)
+        response = requests.post(API_URL, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
         if "errors" in data: print(f"ERRORE GraphQL: {data['errors']}")
@@ -92,7 +96,6 @@ def send_telegram_notification(text):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
         requests.post(api_url, json=payload, timeout=10)
-        print("Notifica Telegram inviata.")
     except Exception as e:
         print(f"Errore invio notifica Telegram: {e}")
 
@@ -102,7 +105,6 @@ def get_eth_rate():
         response.raise_for_status()
         return response.json()["ethereum"]["eur"]
     except Exception:
-        print("Attenzione: impossibile ottenere il tasso da CoinGecko, uso un valore di fallback.")
         return 3000.0
 
 def calculate_eur_price(price_object, rates):
@@ -120,7 +122,7 @@ def calculate_eur_price(price_object, rates):
         return ""
     return ""
 
-# --- 4. FUNZIONI PRINCIPALI DEL GESTIONALE ---
+# --- 4. FUNZIONI PRINCIPALI ---
 def initial_setup():
     print("--- INIZIO PRIMO AGGIORNAMENTO COMPLETO ---")
     
@@ -136,7 +138,7 @@ def initial_setup():
         
         sheet.update(range_name='A1', values=[MAIN_SHEET_HEADERS])
         sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))}', {'textFormat': {'bold': True}})
-        print(f"Foglio '{MAIN_SHEET_NAME}' preparato con tutte le intestazioni.")
+        print(f"Foglio '{MAIN_SHEET_NAME}' preparato.")
     except Exception as e:
         print(f"ERRORE CRITICO GSheets: {e}")
         return
@@ -148,9 +150,7 @@ def initial_setup():
     while has_next_page:
         variables = {"userSlug": USER_SLUG, "rarities": ["limited", "rare", "super_rare", "unique"], "cursor": cursor}
         data = sorare_graphql_fetch(ALL_CARDS_QUERY, variables)
-        if not data or "errors" in data or not data.get("data", {}).get("user", {}).get("cards"):
-            print("Risposta API non valida o con errori. Interruzione.")
-            break
+        if not data or "errors" in data or not data.get("data", {}).get("user", {}).get("cards"): break
         
         cards_data = data["data"]["user"]["cards"]
         all_cards.extend(cards_data.get("nodes", []))
@@ -161,7 +161,6 @@ def initial_setup():
         if has_next_page: time.sleep(1)
 
     print(f"Recupero completato. Trovate {len(all_cards)} carte in totale.")
-
     empty_record = {header: "" for header in MAIN_SHEET_HEADERS}
     data_to_write = []
     for card in all_cards:
@@ -178,7 +177,7 @@ def initial_setup():
 
     if data_to_write:
         sheet.update(range_name='A2', values=data_to_write, value_input_option='USER_ENTERED')
-        print(f"Il foglio '{MAIN_SHEET_NAME}' è stato popolato con {len(all_cards)} carte.")
+        print(f"Foglio '{MAIN_SHEET_NAME}' popolato con {len(all_cards)} carte.")
     else:
         print("Nessuna carta trovata da scrivere.")
     send_telegram_notification(f"✅ <b>Primo Avvio Completato (GitHub)</b>\n\nIl foglio contiene {len(all_cards)} carte.")
@@ -186,17 +185,132 @@ def initial_setup():
 def update_cards():
     print("--- INIZIO AGGIORNAMENTO DATI CARTE ---")
     print("Funzione 'update_cards' non ancora implementata.")
-    send_telegram_notification("✅ <b>Dati Carte Aggiornati (da GitHub) - Placeholder</b>")
+    send_telegram_notification("✅ <b>Dati Carte Aggiornati (GitHub) - Placeholder</b>")
 
 def update_sales():
     print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE ---")
-    print("Funzione 'update_sales' non ancora implementata.")
-    send_telegram_notification("✅ <b>Cronologia Vendite Aggiornata (da GitHub) - Placeholder</b>")
+    start_time = time.time()
+    state = load_state()
+    continuation_data = state.get('update_sales_continuation', {})
+    start_index = continuation_data.get('last_index', 0)
+
+    try:
+        credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
+        gc = gspread.service_account_from_dict(credentials)
+        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        main_sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
+        
+        try:
+            sales_sheet = spreadsheet.worksheet(SALES_HISTORY_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            sales_sheet = spreadsheet.add_worksheet(title=SALES_HISTORY_SHEET_NAME, rows="1", cols="1")
+    except Exception as e:
+        print(f"ERRORE CRITICO GSheets: {e}")
+        return
+
+    if start_index == 0:
+        print("Avvio nuova sessione. Preparo i dati e il foglio di destinazione.")
+        main_records = main_sheet.get_all_records()
+        pairs_map = {}
+        for record in main_records:
+            slug, rarity = record.get("Player API Slug"), record.get("Rarity")
+            if slug and rarity:
+                key = f"{slug}::{rarity}"
+                if key not in pairs_map:
+                    pairs_map[key] = {"slug": slug, "rarity": rarity.lower(), "name": record.get("Player Name")}
+        
+        pairs_to_process = list(pairs_map.values())
+        continuation_data['pairs_to_process'] = pairs_to_process
+        
+        exp_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
+        periods = [3, 7, 14, 30]
+        for p in periods:
+            exp_headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
+        for j in range(1, MAX_SALES_TO_DISPLAY + 1):
+            exp_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
+        exp_headers.append("Last Updated")
+        
+        sales_sheet.clear()
+        sales_sheet.update(range_name='A1', values=[exp_headers])
+        sales_sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(exp_headers))}', {'textFormat': {'bold': True}})
+        continuation_data['exp_headers'] = exp_headers
+        all_rows_to_write = []
+    else:
+        print(f"Ripresa sessione dall'indice {start_index}.")
+        pairs_to_process = continuation_data.get('pairs_to_process', [])
+        exp_headers = continuation_data.get('exp_headers', [])
+        all_rows_to_write = continuation_data.get('all_rows_to_write', [])
+
+    for i in range(start_index, len(pairs_to_process)):
+        if time.time() - start_time > 300: # Timeout dopo 5 minuti
+            print(f"Timeout imminente. Salvo stato all'indice {i}.")
+            continuation_data['last_index'] = i
+            continuation_data['all_rows_to_write'] = all_rows_to_write
+            state['update_sales_continuation'] = continuation_data
+            save_state(state)
+            return
+        
+        pair = pairs_to_process[i]
+        key = f"{pair['slug']}::{pair['rarity']}"
+        print(f"Processo ({i+1}/{len(pairs_to_process)}): {key}")
+
+        sales_to_fetch = INITIAL_SALES_FETCH_COUNT
+        api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {"playerSlug": pair['slug'], "rarity": pair['rarity'], "limit": sales_to_fetch})
+        
+        all_unique_sales = []
+        if api_data and api_data.get("data"):
+            prices = api_data["data"].get("tokens", {}).get("tokenPrices", [])
+            for sale in prices:
+                all_unique_sales.append({
+                    "timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000,
+                    "price": sale['amounts']['eurCents'] / 100,
+                    "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"
+                })
+        
+        all_unique_sales.sort(key=lambda x: x['timestamp'], reverse=True)
+        now_ms = time.time() * 1000
+        today_start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        out_row = [pair['name'], pair['slug'], pair['rarity']]
+        sales_today_in_season = len([s for s in all_unique_sales if datetime.fromtimestamp(s['timestamp']/1000) >= today_start_dt and s['seasonEligibility'] == "IN_SEASON"])
+        sales_today_classic = len([s for s in all_unique_sales if datetime.fromtimestamp(s['timestamp']/1000) >= today_start_dt and s['seasonEligibility'] != "IN_SEASON"])
+        out_row.extend([sales_today_in_season, sales_today_classic])
+        
+        for p in [3, 7, 14, 30]:
+            is_prices, cl_prices = [], []
+            for s in all_unique_sales:
+                if s['timestamp'] >= now_ms - (p * 86400000):
+                    if s['seasonEligibility'] == "IN_SEASON": is_prices.append(s['price'])
+                    else: cl_prices.append(s['price'])
+            out_row.append(sum(is_prices)/len(is_prices) if is_prices else "")
+            out_row.append(sum(cl_prices)/len(cl_prices) if cl_prices else "")
+            
+        for j in range(MAX_SALES_TO_DISPLAY):
+            if j < len(all_unique_sales):
+                sale = all_unique_sales[j]
+                out_row.extend([datetime.fromtimestamp(sale['timestamp']/1000).strftime('%Y-%m-%d %H:%M:%S'), sale['price'], sale['seasonEligibility']])
+            else:
+                out_row.extend(["", "", ""])
+        out_row.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        all_rows_to_write.append(out_row)
+        
+        time.sleep(1)
+
+    if all_rows_to_write:
+        print("Scrittura di tutte le righe sul foglio 'Cronologia Vendite'...")
+        sales_sheet.update(range_name='A2', values=all_rows_to_write, value_input_option='USER_ENTERED')
+    
+    print("Esecuzione completata. Pulizia dello stato.")
+    if 'update_sales_continuation' in state:
+        del state['update_sales_continuation']
+    save_state(state)
+    
+    execution_time = time.time() - start_time
+    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata (GitHub)</b>\n\n⏱️ Tempo: {execution_time:.2f}s")
 
 def update_floors():
     print("--- INIZIO AGGIORNAMENTO FLOOR PRICES ---")
     start_time = time.time()
-    
     try:
         credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
         gc = gspread.service_account_from_dict(credentials)
@@ -204,9 +318,8 @@ def update_floors():
         sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
         print("Connessione a Google Sheets riuscita.")
     except Exception as e:
-        print(f"ERRORE CRITICO: Impossibile connettersi a Google Sheets: {e}")
+        print(f"ERRORE CRITICO GSheets: {e}")
         return
-
     try:
         header_row = sheet.row_values(1)
         slug_col_idx = header_row.index("Player API Slug") + 1
@@ -219,27 +332,21 @@ def update_floors():
     except (ValueError, gspread.exceptions.GSpreadException) as e:
         print(f"ERRORE: Impossibile leggere gli slug. Colonna 'Player API Slug' esiste? Dettagli: {e}")
         return
-
     rates = {"eth_to_eur": get_eth_rate()}
     print(f"Tasso ETH/EUR ottenuto: {rates['eth_to_eur']}")
-    
     floor_prices_map = {}
     price_fields_fragment = "liveSingleSaleOffer { receiverSide { amounts { eurCents, wei, referenceCurrency } } }"
-    
     for i in range(0, len(slugs_to_process), BATCH_SIZE):
         batch_slugs = slugs_to_process[i:i + BATCH_SIZE]
         print(f"Processo lotto {i//BATCH_SIZE + 1}/{ -(-len(slugs_to_process) // BATCH_SIZE) }...")
-        
         query_parts = [
             f'p_{idx}: player(slug: "{slug}") {{ '
             f'L_IN: lowestPriceAnyCard(rarity: limited, inSeason: true) {{ {price_fields_fragment} }} '
             f'L_ANY: lowestPriceAnyCard(rarity: limited, inSeason: false) {{ {price_fields_fragment} }} '
             f'}}' for idx, slug in enumerate(batch_slugs)
         ]
-        
         dynamic_query = f"query GetMultipleFloorPrices {{ football {{ {' '.join(query_parts)} }} }}"
         api_resp = sorare_graphql_fetch(dynamic_query)
-
         if api_resp and api_resp.get("data", {}).get("football"):
             for idx, slug in enumerate(batch_slugs):
                 p_data = api_resp["data"]["football"].get(f'p_{idx}')
@@ -249,7 +356,6 @@ def update_floors():
                         "FLOOR CLASSIC LIMITED": calculate_eur_price(p_data.get('L_ANY'), rates),
                     }
         time.sleep(1)
-
     try:
         print("Aggiornamento del foglio Google in corso...")
         all_sheet_values = sheet.get_all_values()
@@ -259,9 +365,7 @@ def update_floors():
             "FLOOR IN SEASON LIMITED": headers.index("FLOOR IN SEASON LIMITED"),
             "FLOOR CLASSIC LIMITED": headers.index("FLOOR CLASSIC LIMITED"),
         }
-        
         updated_sheet_values = [list(row) for row in all_sheet_values]
-
         for row_idx, row in enumerate(updated_sheet_values[1:], start=1):
             slug_in_row = row[slug_col_idx_header]
             if slug_in_row in floor_prices_map:
@@ -270,18 +374,15 @@ def update_floors():
                     price_value = prices.get(col_name)
                     if price_value is not None:
                         updated_sheet_values[row_idx][col_idx] = price_value
-        
         sheet.update(range_name='A1', values=updated_sheet_values, value_input_option='USER_ENTERED')
         print("Aggiornamento del foglio completato.")
     except Exception as e:
         print(f"ERRORE durante l'aggiornamento del foglio: {e}")
-
     execution_time = time.time() - start_time
     message = f"✅ <b>Floor Prices Aggiornati (GitHub)</b>\n\n⏱️ Tempo: {execution_time:.2f}s"
     send_telegram_notification(message)
 	
 # --- 5. GESTORE DEGLI ARGOMENTI ---
-
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         function_to_run = sys.argv[1]
