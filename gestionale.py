@@ -31,19 +31,24 @@ MAIN_SHEET_HEADERS = [
 ]
 
 # --- 2. QUERY GRAPHQL ---
+# --- [CORREZIONE DEFINITIVA] Aggiunti i frammenti inline "... on Card" e "... on Player" ---
 ALL_CARDS_QUERY = """
     query AllCardsFromUser($userSlug: String!, $rarities: [Rarity!], $cursor: String) {
         user(slug: $userSlug) {
             cards(rarities: $rarities, after: $cursor, first: 50) {
                 nodes {
-                    slug
-                    rarity
-                    ownerSince
-                    player {
-                        displayName
+                    ... on Card {
                         slug
-                        position
-                        u23Eligible
+                        rarity
+                        ownerSince
+                        player {
+                            ... on Player {
+                                displayName
+                                slug
+                                position
+                                u23Eligible
+                            }
+                        }
                     }
                 }
                 pageInfo { endCursor, hasNextPage }
@@ -62,9 +67,7 @@ def save_state(state_data):
     with open(STATE_FILE, "w") as f: json.dump(state_data, f, indent=2)
 
 def sorare_graphql_fetch(query, variables={}):
-    """Funzione generica per le chiamate API a Sorare con header completi."""
     payload = {"query": query, "variables": variables}
-    # --- [MODIFICA CHIAVE] Aggiunto header X-Sorare-ApiVersion ---
     headers = {
         "APIKEY": SORARE_API_KEY,
         "Content-Type": "application/json",
@@ -73,7 +76,6 @@ def sorare_graphql_fetch(query, variables={}):
         "Accept-Language": "en-US,en;q=0.9",
         "X-Sorare-ApiVersion": "v1"
     }
-    # -------------------------------------------------------------
     try:
         response = requests.post(API_URL, json=payload, headers=headers, timeout=20)
         response.raise_for_status()
