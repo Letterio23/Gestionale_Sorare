@@ -13,11 +13,33 @@ jobs:
   run-gestionale:
     runs-on: ubuntu-latest
     steps:
-      # ... (steps identici al precedente)
-      - name: Esegui lo script gestionale
+      - name: Checkout del codice
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Installa dipendenze
+        run: pip install requests gspread google-auth-oauthlib
+
+      - name: Esegui lo script gestionale (sales)
         env:
-          # ... (tutti i segreti necessari)
+          SORARE_API_KEY: ${{ secrets.SORARE_API_KEY }}
+          USER_SLUG: ${{ secrets.USER_SLUG }}
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python gestionale.py update_sales
-      - name: Salva lo stato
+
+      - name: Salva lo stato (se modificato)
         run: |
-          # ... (logica di commit del file state.json)
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          if [ -f state.json ]; then
+            git add state.json
+            git commit -m "Aggiorna stato dopo update_sales" || exit 0
+            git push
+          fi
