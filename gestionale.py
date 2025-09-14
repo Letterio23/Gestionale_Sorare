@@ -23,6 +23,7 @@ BATCH_SIZE = 15
 MAX_SALES_TO_DISPLAY = 100
 MAX_SALES_FROM_API = 7
 INITIAL_SALES_FETCH_COUNT = 20
+CARD_DATA_UPDATE_INTERVAL_HOURS = 0.5
 
 MAIN_SHEET_HEADERS = [
     "Slug", "Rarity", "Player Name", "Player API Slug", "Position", "U23 Eligible?", "Livello", "In Season?", 
@@ -41,9 +42,7 @@ ALL_CARDS_QUERY = """
             cards(rarities: $rarities, after: $cursor, first: 50) {
                 nodes {
                     ... on Card {
-                        slug
-                        rarity
-                        ownerSince
+                        slug, rarity, ownerSince
                         player { ... on Player { displayName, slug, position, u23Eligible } }
                     }
                 }
@@ -59,6 +58,27 @@ PLAYER_TOKEN_PRICES_QUERY = """
                 amounts { eurCents }
                 date
                 card { inSeasonEligible }
+            }
+        }
+    }
+"""
+CARD_DETAILS_QUERY = """
+    query GetCardDetails($cardSlug: String!) {
+        anyCard(slug: $cardSlug) {
+            ... on Card {
+                rarity, grade, xp, xpNeededForNextGrade, pictureUrl, inSeasonEligible, secondaryMarketFeeEnabled
+                liveSingleSaleOffer { receiverSide { amounts { eurCents, wei, referenceCurrency } } }
+                player {
+                    slug, displayName, position, lastFiveSo5Appearances, lastFifteenSo5Appearances
+                    playerGameScores(last: 15) { score }
+                    activeInjuries { status, expectedEndDate }
+                    activeSuspensions { reason, endDate }
+                    activeClub {
+                        name
+                        upcomingGames(first: 1) { id, date, competition { displayName }, homeTeam { ... on TeamInterface { name } }, awayTeam { ... on TeamInterface { name } } }
+                    }
+                    u23Eligible
+                }
             }
         }
     }
@@ -122,6 +142,60 @@ def calculate_eur_price(price_object, rates):
         return ""
     return ""
 
+def build_updated_card_row(original_record, card_details, rates):
+    record = original_record.copy()
+    player_details = card_details.get("player", {})
+    if not player_details: return [original_record.get(h, '') for h in MAIN_SHEET_HEADERS]
+
+    record["Livello"] = card_details.get("grade")
+    record["XP Corrente"] = card_details.get("xp")
+    record["XP Prox Livello"] = card_details.get("xpNeededForNextGrade")
+    if record["XP Prox Livello"] is not None and record["XP Corrente"] is not None:
+        record["XP Mancanti Livello"] = record["XP Prox Livello"] - record["XP Corrente"]
+    
+    record["In Season?"] = "Sì" if card_details.get("inSeasonEligible") else "No"
+    record["Fee Abilitata?"] = "Sì" if card_details.get("secondaryMarketFeeEnabled") else "No"
+    record["Foto URL"] = card_details.get("pictureUrl", "")
+    record["Sale Price (EUR)"] = calculate_eur_price(card_details, rates)
+    
+    l5 = player_details.get('lastFiveSo5Appearances')
+    l15 = player_details.get('lastFifteenSo5Appearances')
+    if l5 is not None: record["L5 So5 (%)"] = f"{int((l5 / 5) * 100)}%"
+    if l15 is not None: record["L15 So5 (%)"] = f"{int((l15 / 15) * 100)}%"
+    
+    scores = [s.get('score') for s in player_details.get("playerGameScores", []) if s.get('score') is not None]
+    if scores:
+        if len(scores) >= 3: record["Avg So5 Score (3)"] = round(sum(scores[:3]) / len(scores[:3]), 2)
+        if len(scores) >= 5: record["Avg So5 Score (5)"] = round(sum(scores[:5]) / len(scores[:5]), 2)
+        record["Avg So5 Score (15)"] = round(sum(scores) / len(scores), 2)
+        record["Last 5 SO5 Scores"] = ", ".join(map(str, scores[:5]))
+
+    injuries = player_details.get("activeInjuries", [])
+    if injuries:
+        end_date = datetime.fromisoformat(injuries[0].get('expectedEndDate').replace("Z", "+00:00")).strftime('%d/%m/%y')
+        record["Infortunio"] = f"{injuries[0].get('status', '')} fino al {end_date}"
+    else: record["Infortunio"] = ""
+
+    suspensions = player_details.get("activeSuspensions", [])
+    if suspensions:
+        end_date = datetime.fromisoformat(suspensions[0].get('endDate').replace("Z", "+00:00")).strftime('%d/%m/%y')
+        record["Squalifica"] = f"{suspensions[0].get('reason', '')} fino al {end_date}"
+    else: record["Squalifica"] = ""
+        
+    club = player_details.get("activeClub")
+    if club and club.get("upcomingGames"):
+        game = club["upcomingGames"][0]
+        game_date = datetime.fromisoformat(game.get('date').replace("Z", "+00:00")).strftime('%d-%m-%y %H:%M')
+        home_team, away_team = game.get("homeTeam", {}).get("name", ""), game.get("awayTeam", {}).get("name", "")
+        competition = game.get("competition", {}).get("displayName", "")
+        record["Data Prossima Partita"], record["Next Game API ID"] = game_date, game.get("id", "")
+        record["Partita"] = f"🏠 vs {away_team} [{competition}]" if home_team == club.get("name") else f"✈️ vs {home_team} [{competition}]"
+    else:
+        record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
+
+    record["Ultimo Aggiornamento"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return [record.get(header, '') for header in MAIN_SHEET_HEADERS]
+
 # --- 4. FUNZIONI PRINCIPALI ---
 def initial_setup():
     print("--- INIZIO PRIMO AGGIORNAMENTO COMPLETO ---")
@@ -138,7 +212,7 @@ def initial_setup():
         
         sheet.update(range_name='A1', values=[MAIN_SHEET_HEADERS])
         sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))}', {'textFormat': {'bold': True}})
-        print(f"Foglio '{MAIN_SHEET_NAME}' preparato.")
+        print(f"Foglio '{MAIN_SHEET_NAME}' preparato con tutte le intestazioni.")
     except Exception as e:
         print(f"ERRORE CRITICO GSheets: {e}")
         return
@@ -150,7 +224,9 @@ def initial_setup():
     while has_next_page:
         variables = {"userSlug": USER_SLUG, "rarities": ["limited", "rare", "super_rare", "unique"], "cursor": cursor}
         data = sorare_graphql_fetch(ALL_CARDS_QUERY, variables)
-        if not data or "errors" in data or not data.get("data", {}).get("user", {}).get("cards"): break
+        if not data or "errors" in data or not data.get("data", {}).get("user", {}).get("cards"):
+            print("Risposta API non valida o con errori. Interruzione.")
+            break
         
         cards_data = data["data"]["user"]["cards"]
         all_cards.extend(cards_data.get("nodes", []))
@@ -177,15 +253,95 @@ def initial_setup():
 
     if data_to_write:
         sheet.update(range_name='A2', values=data_to_write, value_input_option='USER_ENTERED')
-        print(f"Foglio '{MAIN_SHEET_NAME}' popolato con {len(all_cards)} carte.")
+        print(f"Il foglio '{MAIN_SHEET_NAME}' è stato popolato con {len(all_cards)} carte.")
     else:
         print("Nessuna carta trovata da scrivere.")
     send_telegram_notification(f"✅ <b>Primo Avvio Completato (GitHub)</b>\n\nIl foglio contiene {len(all_cards)} carte.")
 
 def update_cards():
+    """Traduzione completa di updateAllCardData_V3."""
     print("--- INIZIO AGGIORNAMENTO DATI CARTE ---")
-    print("Funzione 'update_cards' non ancora implementata.")
-    send_telegram_notification("✅ <b>Dati Carte Aggiornati (GitHub) - Placeholder</b>")
+    start_time = time.time()
+    state = load_state()
+    continuation_data = state.get('update_cards_continuation', {})
+    start_index = continuation_data.get('last_index', 0)
+    
+    try:
+        credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
+        gc = gspread.service_account_from_dict(credentials)
+        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
+        print("Connessione a Google Sheets riuscita.")
+    except Exception as e:
+        print(f"ERRORE CRITICO GSheets: {e}")
+        return
+
+    rates = {"eth_to_eur": get_eth_rate()}
+
+    if start_index == 0:
+        print("Avvio nuova sessione. Identifico le carte da aggiornare.")
+        all_sheet_records = sheet.get_all_records()
+        api_cards_data = sorare_graphql_fetch(ALL_CARDS_QUERY, {"userSlug": USER_SLUG})
+        
+        api_cards = api_cards_data.get("data", {}).get("user", {}).get("cards", {}).get("nodes", []) if api_cards_data else []
+        api_card_slugs = {card['slug'] for card in api_cards}
+        
+        cutoff_time = datetime.now() - timedelta(hours=CARD_DATA_UPDATE_INTERVAL_HOURS)
+        cards_to_process = []
+        for i, record in enumerate(all_sheet_records):
+            record['row_index'] = i + 2
+            last_update_str = record.get('Ultimo Aggiornamento')
+            try:
+                if not last_update_str or datetime.strptime(last_update_str, '%Y-%m-%d %H:%M:%S') < cutoff_time:
+                    cards_to_process.append(record)
+            except ValueError:
+                cards_to_process.append(record)
+        
+        print(f"Identificate {len(cards_to_process)} carte da aggiornare.")
+        continuation_data['cards_to_process'] = cards_to_process
+    else:
+        print(f"Ripresa sessione dall'indice {start_index}.")
+        cards_to_process = continuation_data.get('cards_to_process', [])
+
+    if not cards_to_process:
+        print("Nessuna carta da aggiornare in questa sessione.")
+        return
+        
+    for i in range(start_index, len(cards_to_process)):
+        if time.time() - start_time > 300: # Timeout 5 min
+            print(f"Timeout imminente. Salvo stato all'indice {i}.")
+            continuation_data['last_index'] = i
+            state['update_cards_continuation'] = continuation_data
+            save_state(state)
+            return
+            
+        card_to_update = cards_to_process[i]
+        card_slug = card_to_update.get('Slug')
+        if not card_slug: continue
+        
+        print(f"Aggiorno carta ({i+1}/{len(cards_to_process)}): {card_slug}")
+
+        details_data = sorare_graphql_fetch(CARD_DETAILS_QUERY, {"cardSlug": card_slug})
+        if not details_data or not details_data.get("data", {}).get("anyCard"):
+            time.sleep(1)
+            continue
+        
+        card_details = details_data["data"]["anyCard"]
+        updated_row = build_updated_card_row(card_to_update, card_details, rates)
+        
+        try:
+            sheet.update(range_name=f'A{card_to_update["row_index"]}', values=[updated_row], value_input_option='USER_ENTERED')
+        except Exception as e:
+            print(f"Errore durante l'aggiornamento della riga per {card_slug}: {e}")
+        time.sleep(1.5) # Aumentiamo la pausa per essere più gentili con l'API
+
+    print("Esecuzione completata. Pulizia dello stato.")
+    if 'update_cards_continuation' in state:
+        del state['update_cards_continuation']
+    save_state(state)
+    
+    execution_time = time.time() - start_time
+    send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\n\n⏱️ Tempo: {execution_time:.2f}s")
 
 def update_sales():
     print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE ---")
@@ -199,7 +355,6 @@ def update_sales():
         gc = gspread.service_account_from_dict(credentials)
         spreadsheet = gc.open_by_key(SPREADSHEET_ID)
         main_sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
-        
         try:
             sales_sheet = spreadsheet.worksheet(SALES_HISTORY_SHEET_NAME)
         except gspread.WorksheetNotFound:
@@ -224,10 +379,8 @@ def update_sales():
         
         exp_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
         periods = [3, 7, 14, 30]
-        for p in periods:
-            exp_headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
-        for j in range(1, MAX_SALES_TO_DISPLAY + 1):
-            exp_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
+        for p in periods: exp_headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
+        for j in range(1, MAX_SALES_TO_DISPLAY + 1): exp_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
         exp_headers.append("Last Updated")
         
         sales_sheet.clear()
@@ -238,11 +391,10 @@ def update_sales():
     else:
         print(f"Ripresa sessione dall'indice {start_index}.")
         pairs_to_process = continuation_data.get('pairs_to_process', [])
-        exp_headers = continuation_data.get('exp_headers', [])
         all_rows_to_write = continuation_data.get('all_rows_to_write', [])
 
     for i in range(start_index, len(pairs_to_process)):
-        if time.time() - start_time > 300: # Timeout dopo 5 minuti
+        if time.time() - start_time > 300: # Timeout
             print(f"Timeout imminente. Salvo stato all'indice {i}.")
             continuation_data['last_index'] = i
             continuation_data['all_rows_to_write'] = all_rows_to_write
@@ -258,7 +410,7 @@ def update_sales():
         api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {"playerSlug": pair['slug'], "rarity": pair['rarity'], "limit": sales_to_fetch})
         
         all_unique_sales = []
-        if api_data and api_data.get("data"):
+        if api_data and api_data.get("data") and not api_data.get("errors"):
             prices = api_data["data"].get("tokens", {}).get("tokenPrices", [])
             for sale in prices:
                 all_unique_sales.append({
@@ -293,7 +445,6 @@ def update_sales():
                 out_row.extend(["", "", ""])
         out_row.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         all_rows_to_write.append(out_row)
-        
         time.sleep(1)
 
     if all_rows_to_write:
