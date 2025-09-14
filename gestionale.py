@@ -229,47 +229,85 @@ def build_sales_history_row(name, slug, rarity, all_sales, headers):
     return [out_row_map.get(h, '') for h in headers]
 
 # --- 4. FUNZIONI PRINCIPALI ---
-def initial_setup():
-    print("--- INIZIO PRIMO AGGIORNAMENTO COMPLETO ---")
+def sync_galleria():
+    print("--- INIZIO SINCRONIZZAZIONE GALLERIA ---")
     try:
-        credentials, gc = json.loads(GSPREAD_CREDENTIALS_JSON), gspread.service_account_from_dict(credentials)
+        credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
+        gc = gspread.service_account_from_dict(credentials)
         spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-        try: sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
-        except gspread.WorksheetNotFound: sheet = spreadsheet.add_worksheet(title=MAIN_SHEET_NAME, rows="1000", cols=len(MAIN_SHEET_HEADERS))
-        sheet.clear()
-        sheet.update(range_name='A1', values=[MAIN_SHEET_HEADERS])
-        sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))}', {'textFormat': {'bold': True}})
-        print(f"Foglio '{MAIN_SHEET_NAME}' preparato.")
+        try:
+            sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
+            # Verifica e aggiungi header se mancano
+            if not sheet.row_values(1):
+                 sheet.update(range_name='A1', values=[MAIN_SHEET_HEADERS])
+                 sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))}', {'textFormat': {'bold': True}})
+        except gspread.WorksheetNotFound:
+            sheet = spreadsheet.add_worksheet(title=MAIN_SHEET_NAME, rows="1", cols=len(MAIN_SHEET_HEADERS))
+            sheet.update(range_name='A1', values=[MAIN_SHEET_HEADERS])
+            sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))}', {'textFormat': {'bold': True}})
+            print(f"Foglio '{MAIN_SHEET_NAME}' creato.")
     except Exception as e:
-        print(f"ERRORE CRITICO GSheets: {e}")
+        print(f"ERRORE CRITICO GSheets in sync_galleria: {e}")
         return
+
     print("Recupero di tutte le carte dall'API di Sorare...")
-    all_cards, cursor, has_next_page = [], None, True
+    api_cards = []
+    cursor, has_next_page = None, True
     while has_next_page:
         variables = {"userSlug": USER_SLUG, "rarities": ["limited", "rare", "super_rare", "unique"], "cursor": cursor}
         data = sorare_graphql_fetch(ALL_CARDS_QUERY, variables)
-        if not data or "errors" in data or not data.get("data", {}).get("user", {}).get("cards"): break
+        if not data or "errors" in data or not data.get("data", {}).get("user", {}).get("cards"):
+            break
         cards_data = data["data"]["user"]["cards"]
-        all_cards.extend(cards_data.get("nodes", []))
+        api_cards.extend(cards_data.get("nodes", []))
         page_info = cards_data.get("pageInfo", {})
         has_next_page, cursor = page_info.get("hasNextPage", False), page_info.get("endCursor")
-        print(f"Recuperate {len(all_cards)} carte finora...")
         if has_next_page: time.sleep(1)
-    print(f"Recupero completato. Trovate {len(all_cards)} carte in totale.")
-    empty_record = {header: "" for header in MAIN_SHEET_HEADERS}
-    data_to_write = []
-    for card in all_cards:
-        player = card.get("player") or {}
-        record = empty_record.copy()
-        record["Slug"], record["Rarity"], record["Owner Since"] = card.get("slug", ""), card.get("rarity", ""), card.get("ownerSince", "")
-        record["Player Name"], record["Player API Slug"] = player.get("displayName", ""), player.get("slug", "")
-        record["Position"], record["U23 Eligible?"] = player.get("position", ""), "Sì" if player.get("u23Eligible") else "No"
-        data_to_write.append([record[header] for header in MAIN_SHEET_HEADERS])
-    if data_to_write:
-        sheet.update(range_name='A2', values=data_to_write, value_input_option='USER_ENTERED')
-        print(f"Foglio '{MAIN_SHEET_NAME}' popolato con {len(all_cards)} carte.")
-    else: print("Nessuna carta trovata da scrivere.")
-    send_telegram_notification(f"✅ <b>Primo Avvio Completato (GitHub)</b>\n\nIl foglio contiene {len(all_cards)} carte.")
+
+    api_card_slugs = {card['slug'] for card in api_cards}
+    print(f"Recupero completato. Trovate {len(api_card_slugs)} carte uniche in totale.")
+
+    print("Leggo le carte presenti nel foglio Google...")
+    try:
+        sheet_records = sheet.get_all_records()
+        sheet_card_slugs = {record['Slug']: {'row_index': i + 2} for i, record in enumerate(sheet_records) if record.get('Slug')}
+    except gspread.exceptions.GSpreadException as e:
+        print(f"Attenzione: il foglio '{MAIN_SHEET_NAME}' sembra vuoto o malformato. Verrà trattato come vuoto. Dettagli: {e}")
+        sheet_card_slugs = {}
+    print(f"Trovate {len(sheet_card_slugs)} carte nel foglio.")
+
+    slugs_to_add = api_card_slugs - sheet_card_slugs.keys()
+    slugs_to_delete = sheet_card_slugs.keys() - api_card_slugs
+
+    if slugs_to_delete:
+        rows_to_delete = sorted([sheet_card_slugs[slug]['row_index'] for slug in slugs_to_delete], reverse=True)
+        print(f"Rimozione di {len(rows_to_delete)} righe...")
+        for row_index in rows_to_delete:
+            try:
+                sheet.delete_rows(row_index)
+                time.sleep(1.5)
+            except Exception as e:
+                print(f"Errore durante la rimozione della riga {row_index}: {e}")
+
+    if slugs_to_add:
+        new_cards_data = [card for card in api_cards if card['slug'] in slugs_to_add]
+        data_to_write = []
+        empty_record = {header: "" for header in MAIN_SHEET_HEADERS}
+        for card in new_cards_data:
+            player = card.get("player") or {}
+            record = empty_record.copy()
+            record["Slug"], record["Rarity"], record["Owner Since"] = card.get("slug", ""), card.get("rarity", ""), card.get("ownerSince", "")
+            record["Player Name"], record["Player API Slug"] = player.get("displayName", ""), player.get("slug", "")
+            record["Position"], record["U23 Eligible?"] = player.get("position", ""), "Sì" if player.get("u23Eligible") else "No"
+            data_to_write.append([record.get(header, '') for header in MAIN_SHEET_HEADERS])
+
+        if data_to_write:
+            print(f"Aggiunta di {len(data_to_write)} nuove carte al foglio...")
+            sheet.append_rows(data_to_write, value_input_option='USER_ENTERED')
+
+    message = f"✅ <b>Sincronizzazione Galleria Completata</b>\n\nGalleria: {len(api_card_slugs)} carte\n➕ Aggiunte: {len(slugs_to_add)}\n➖ Rimosse: {len(slugs_to_delete)}"
+    print(message)
+    send_telegram_notification(message)
 def update_cards():
     print("--- INIZIO AGGIORNAMENTO DATI CARTE (OTTIMIZZATO) ---")
     start_time, state = time.time(), load_state()
@@ -431,10 +469,10 @@ def update_floors():
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         function_to_run = sys.argv[1]
-        if function_to_run == "initial_setup": initial_setup()
+        if function_to_run == "sync_galleria": sync_galleria()
         elif function_to_run == "update_cards": update_cards()
         elif function_to_run == "update_sales": update_sales()
         elif function_to_run == "update_floors": update_floors()
         else: print(f"Errore: Funzione '{function_to_run}' non riconosciuta.")
     else:
-        print("Nessuna funzione specificata.")
+        print("Nessuna funzione specificata. Le funzioni disponibili sono: sync_galleria, update_cards, update_sales, update_floors.")
