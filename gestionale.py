@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 import gspread
 
-# --- 1. CONFIGURAZIONE DAI SEGRETI E COSTANTI ---
+# --- 1. CONFIGURAZIONE ---
 SORARE_API_KEY = os.environ.get("SORARE_API_KEY")
 USER_SLUG = os.environ.get("USER_SLUG")
 GSPREAD_CREDENTIALS_JSON = os.environ.get("GSPREAD_CREDENTIALS")
@@ -17,7 +17,6 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 API_URL = "https://api.sorare.com/graphql"
 MAIN_SHEET_NAME = "Foglio1"
-SALES_HISTORY_SHEET_NAME = "Cronologia Vendite"
 STATE_FILE = "state.json"
 BATCH_SIZE = 15
 
@@ -63,11 +62,17 @@ def save_state(state_data):
     with open(STATE_FILE, "w") as f: json.dump(state_data, f, indent=2)
 
 def sorare_graphql_fetch(query, variables={}):
+    """Funzione generica per le chiamate API a Sorare con header completi."""
     payload = {"query": query, "variables": variables}
+    # --- [MODIFICA CHIAVE] Uso degli header completi ---
     headers = {
-        "APIKEY": SORARE_API_KEY, "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "APIKEY": SORARE_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
     }
+    # ----------------------------------------------------
     try:
         response = requests.post(API_URL, json=payload, headers=headers, timeout=20)
         response.raise_for_status()
@@ -178,12 +183,12 @@ def initial_setup():
 def update_cards():
     print("--- INIZIO AGGIORNAMENTO DATI CARTE ---")
     print("Funzione 'update_cards' non ancora implementata.")
-    send_telegram_notification("✅ <b>Dati Carte Aggiornati (GitHub) - Placeholder</b>")
+    send_telegram_notification("✅ <b>Dati Carte Aggiornati (da GitHub) - Placeholder</b>")
 
 def update_sales():
     print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE ---")
     print("Funzione 'update_sales' non ancora implementata.")
-    send_telegram_notification("✅ <b>Cronologia Vendite Aggiornata (GitHub) - Placeholder</b>")
+    send_telegram_notification("✅ <b>Cronologia Vendite Aggiornata (da GitHub) - Placeholder</b>")
 
 def update_floors():
     print("--- INIZIO AGGIORNAMENTO FLOOR PRICES ---")
