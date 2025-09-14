@@ -50,10 +50,11 @@ PLAYER_TOKEN_PRICES_QUERY = """
 PRICE_FRAGMENT = "liveSingleSaleOffer { receiverSide { amounts { eurCents, usdCents, gbpCents, wei, referenceCurrency } } }"
 def build_batched_card_details_query(card_slugs: list[str]) -> str:
     """
-    Costruisce una query GraphQL per recuperare i dettagli di più carte in una sola volta usando gli alias.
+    Costruisce una query GraphQL per recuperare i dettagli di più carte in una sola volta
+    usando un frammento nominato per evitare errori di duplicazione.
     """
-    card_fields_fragment = f"""
-... on Card {{
+    card_fragment = f"""
+fragment CardDetails on Card {{
     rarity, grade, xp, xpNeededForNextGrade, pictureUrl, inSeasonEligible, secondaryMarketFeeEnabled
     liveSingleSaleOffer {{ receiverSide {{ amounts {{ eurCents, usdCents, gbpCents, wei, referenceCurrency }} }} }}
     player {{
@@ -77,10 +78,10 @@ def build_batched_card_details_query(card_slugs: list[str]) -> str:
         alias = f"card{i}"
         query_body += f'''
     {alias}: anyCard(slug: "{slug}") {{
-        {card_fields_fragment}
+        ...CardDetails
     }}
 '''
-    return f"query GetBatchedCardDetails {{ {query_body} }}"
+    return f"query GetBatchedCardDetails {{ {query_body} }} {card_fragment}"
 PROJECTION_QUERY = """
     query GetProjection($playerSlug: String!, $gameId: ID!) {
         football {
