@@ -42,7 +42,9 @@ ALL_CARDS_QUERY = """
             cards(rarities: $rarities, after: $cursor, first: 50) {
                 nodes {
                     ... on Card {
-                        slug, rarity, ownerSince
+                        slug
+                        rarity
+                        ownerSince
                         player { ... on Player { displayName, slug, position, u23Eligible } }
                     }
                 }
@@ -66,10 +68,20 @@ CARD_DETAILS_QUERY = """
     query GetCardDetails($cardSlug: String!) {
         anyCard(slug: $cardSlug) {
             ... on Card {
-                rarity, grade, xp, xpNeededForNextGrade, pictureUrl, inSeasonEligible, secondaryMarketFeeEnabled
+                rarity
+                grade
+                xp
+                xpNeededForNextGrade
+                pictureUrl
+                inSeasonEligible
+                secondaryMarketFeeEnabled
                 liveSingleSaleOffer { receiverSide { amounts { eurCents, wei, referenceCurrency } } }
                 player {
-                    slug, displayName, position, lastFiveSo5Appearances, lastFifteenSo5Appearances
+                    slug
+                    displayName
+                    position
+                    lastFiveSo5Appearances
+                    lastFifteenSo5Appearances
                     playerGameScores(last: 15) { score }
                     activeInjuries { status, expectedEndDate }
                     activeSuspensions { reason, endDate }
@@ -163,33 +175,39 @@ def build_updated_card_row(original_record, card_details, rates):
     if l5 is not None: record["L5 So5 (%)"] = f"{int((l5 / 5) * 100)}%"
     if l15 is not None: record["L15 So5 (%)"] = f"{int((l15 / 15) * 100)}%"
     
-    scores = [s.get('score') for s in player_details.get("playerGameScores", []) if s.get('score') is not None]
+    scores = [s.get('score') for s in player_details.get("playerGameScores", []) if s and s.get('score') is not None]
     if scores:
-        if len(scores) >= 3: record["Avg So5 Score (3)"] = round(sum(scores[:3]) / len(scores[:3]), 2)
-        if len(scores) >= 5: record["Avg So5 Score (5)"] = round(sum(scores[:5]) / len(scores[:5]), 2)
-        record["Avg So5 Score (15)"] = round(sum(scores) / len(scores), 2)
+        if len(scores) >= 3: record["Avg So5 Score (3)"] = round(sum(scores[:3]) / 3, 2)
+        if len(scores) >= 5: record["Avg So5 Score (5)"] = round(sum(scores[:5]) / 5, 2)
+        record["Avg So5 Score (15)"] = round(sum(scores) / len(scores), 2) if scores else ""
         record["Last 5 SO5 Scores"] = ", ".join(map(str, scores[:5]))
 
     injuries = player_details.get("activeInjuries", [])
-    if injuries:
-        end_date = datetime.fromisoformat(injuries[0].get('expectedEndDate').replace("Z", "+00:00")).strftime('%d/%m/%y')
-        record["Infortunio"] = f"{injuries[0].get('status', '')} fino al {end_date}"
-    else: record["Infortunio"] = ""
+    if injuries and injuries[0].get('expectedEndDate'):
+        end_date_str = injuries[0].get('expectedEndDate')
+        end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00")).strftime('%d/%m/%y')
+        record["Infortunio"] = f"{injuries[0].get('status', 'Infortunato')} fino al {end_date}"
+    else:
+        record["Infortunio"] = ""
 
     suspensions = player_details.get("activeSuspensions", [])
-    if suspensions:
-        end_date = datetime.fromisoformat(suspensions[0].get('endDate').replace("Z", "+00:00")).strftime('%d/%m/%y')
-        record["Squalifica"] = f"{suspensions[0].get('reason', '')} fino al {end_date}"
-    else: record["Squalifica"] = ""
+    if suspensions and suspensions[0].get('endDate'):
+        end_date_str = suspensions[0].get('endDate')
+        end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00")).strftime('%d/%m/%y')
+        record["Squalifica"] = f"{suspensions[0].get('reason', 'Squalificato')} fino al {end_date}"
+    else:
+        record["Squalifica"] = ""
         
     club = player_details.get("activeClub")
     if club and club.get("upcomingGames"):
         game = club["upcomingGames"][0]
-        game_date = datetime.fromisoformat(game.get('date').replace("Z", "+00:00")).strftime('%d-%m-%y %H:%M')
-        home_team, away_team = game.get("homeTeam", {}).get("name", ""), game.get("awayTeam", {}).get("name", "")
-        competition = game.get("competition", {}).get("displayName", "")
-        record["Data Prossima Partita"], record["Next Game API ID"] = game_date, game.get("id", "")
-        record["Partita"] = f"🏠 vs {away_team} [{competition}]" if home_team == club.get("name") else f"✈️ vs {home_team} [{competition}]"
+        if game and game.get('date'):
+            game_date = datetime.fromisoformat(game['date'].replace("Z", "+00:00")).strftime('%d-%m-%y %H:%M')
+            home, away, comp = game.get("homeTeam", {}).get("name", ""), game.get("awayTeam", {}).get("name", ""), game.get("competition", {}).get("displayName", "")
+            record["Data Prossima Partita"], record["Next Game API ID"] = game_date, game.get("id", "")
+            record["Partita"] = f"🏠 vs {away} [{comp}]" if home == club.get("name") else f"✈️ vs {home} [{comp}]"
+        else:
+             record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Data non disp.", "", ""
     else:
         record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
 
@@ -237,6 +255,7 @@ def initial_setup():
         if has_next_page: time.sleep(1)
 
     print(f"Recupero completato. Trovate {len(all_cards)} carte in totale.")
+
     empty_record = {header: "" for header in MAIN_SHEET_HEADERS}
     data_to_write = []
     for card in all_cards:
@@ -333,7 +352,7 @@ def update_cards():
             sheet.update(range_name=f'A{card_to_update["row_index"]}', values=[updated_row], value_input_option='USER_ENTERED')
         except Exception as e:
             print(f"Errore durante l'aggiornamento della riga per {card_slug}: {e}")
-        time.sleep(1.5) # Aumentiamo la pausa per essere più gentili con l'API
+        time.sleep(1.5)
 
     print("Esecuzione completata. Pulizia dello stato.")
     if 'update_cards_continuation' in state:
