@@ -48,40 +48,39 @@ PLAYER_TOKEN_PRICES_QUERY = """
     }
 """
 PRICE_FRAGMENT = "liveSingleSaleOffer { receiverSide { amounts { eurCents, usdCents, gbpCents, wei, referenceCurrency } } }"
-def build_batched_card_details_query(card_slugs: list[str]) -> str:
-    """
-    Costruisce una query GraphQL per recuperare i dettagli di più carte in una sola volta
-    usando un frammento nominato per evitare errori di duplicazione.
-    """
-    card_fragment = f"""
-fragment CardDetails on Card {{
-    rarity, grade, xp, xpNeededForNextGrade, pictureUrl, inSeasonEligible, secondaryMarketFeeEnabled
-    liveSingleSaleOffer {{ receiverSide {{ amounts {{ eurCents, usdCents, gbpCents, wei, referenceCurrency }} }} }}
-    player {{
-        slug, displayName, position, lastFiveSo5Appearances, lastFifteenSo5Appearances
-        playerGameScores(last: 15) {{ score }}
-        activeInjuries {{ status, expectedEndDate }}
-        activeSuspensions {{ reason, endDate }}
-        activeClub {{ name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
-        u23Eligible
-        L_ANY: lowestPriceAnyCard(rarity: limited, inSeason: false) {{ {PRICE_FRAGMENT} }}
-        L_IN: lowestPriceAnyCard(rarity: limited, inSeason: true) {{ {PRICE_FRAGMENT} }}
-        R_ANY: lowestPriceAnyCard(rarity: rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
-        R_IN: lowestPriceAnyCard(rarity: rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
-        SR_ANY: lowestPriceAnyCard(rarity: super_rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
-        SR_IN: lowestPriceAnyCard(rarity: super_rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
+BATCH_CARD_DETAILS_QUERY = f"""
+query GetBatchedCardDetails($slugs: [String!]!) {{
+    cards(slugs: $slugs) {{
+        slug
+        rarity
+        grade
+        xp
+        xpNeededForNextGrade
+        pictureUrl
+        inSeasonEligible
+        secondaryMarketFeeEnabled
+        liveSingleSaleOffer {{ receiverSide {{ amounts {{ eurCents, usdCents, gbpCents, wei, referenceCurrency }} }} }}
+        player {{
+            slug
+            displayName
+            position
+            lastFiveSo5Appearances
+            lastFifteenSo5Appearances
+            playerGameScores(last: 15) {{ score }}
+            activeInjuries {{ status, expectedEndDate }}
+            activeSuspensions {{ reason, endDate }}
+            activeClub {{ name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
+            u23Eligible
+            L_ANY: lowestPriceAnyCard(rarity: limited, inSeason: false) {{ {PRICE_FRAGMENT} }}
+            L_IN: lowestPriceAnyCard(rarity: limited, inSeason: true) {{ {PRICE_FRAGMENT} }}
+            R_ANY: lowestPriceAnyCard(rarity: rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
+            R_IN: lowestPriceAnyCard(rarity: rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
+            SR_ANY: lowestPriceAnyCard(rarity: super_rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
+            SR_IN: lowestPriceAnyCard(rarity: super_rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
+        }}
     }}
 }}
 """
-    query_body = ""
-    for i, slug in enumerate(card_slugs):
-        alias = f"card{i}"
-        query_body += f'''
-    {alias}: anyCard(slug: "{slug}") {{
-        ...CardDetails
-    }}
-'''
-    return f"query GetBatchedCardDetails {{ {query_body} }} {card_fragment}"
 PROJECTION_QUERY = """
     query GetProjection($playerSlug: String!, $gameId: ID!) {
         football {
@@ -319,10 +318,9 @@ def sync_galleria():
     print(message)
     send_telegram_notification(message)
 def update_cards():
-    print("--- INIZIO AGGIORNAMENTO DATI CARTE (OTTIMIZZATO CON BATCH) ---")
+    print("--- INIZIO AGGIORNAMENTO DATI CARTE (OTTIMIZZATO CON BATCH V2) ---")
     start_time = time.time()
 
-    # 1. Connessione a GSheets
     try:
         credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
         gc = gspread.service_account_from_dict(credentials)
@@ -332,12 +330,10 @@ def update_cards():
         print(f"ERRORE CRITICO GSheets: {e}")
         return
 
-    # 2. Identificazione carte da aggiornare
-    print("Avvio nuova sessione...")
     try:
         all_sheet_records = sheet.get_all_records()
     except gspread.exceptions.GSpreadException as e:
-        print(f"Attenzione: il foglio '{MAIN_SHEET_NAME}' sembra vuoto o malformato. Impossibile aggiornare le carte. Dettagli: {e}")
+        print(f"Attenzione: il foglio '{MAIN_SHEET_NAME}' sembra vuoto. Impossibile aggiornare. Dettagli: {e}")
         return
 
     cutoff_time = datetime.now() - timedelta(hours=CARD_DATA_UPDATE_INTERVAL_HOURS)
@@ -345,6 +341,8 @@ def update_cards():
     for i, record in enumerate(all_sheet_records):
         record['row_index'] = i + 2
         needs_update = False
+        if not record.get('Slug'): continue
+
         projection_grade = record.get('Projection Grade', '').strip()
         last_update_str = record.get('Ultimo Aggiornamento', '').strip()
 
@@ -357,7 +355,7 @@ def update_cards():
             except ValueError:
                 needs_update = True
 
-        if needs_update and record.get('Slug'):
+        if needs_update:
             cards_to_process.append(record)
 
     if not cards_to_process:
@@ -366,12 +364,9 @@ def update_cards():
 
     print(f"Identificate {len(cards_to_process)} carte da aggiornare.")
 
-    # 3. Processo in batch
     rates = {"eth_to_eur": get_eth_rate()}
     rates.update(get_currency_rates())
     updates_for_gsheet = []
-
-    # Definisci la dimensione del batch per le query GraphQL
     CARD_UPDATE_BATCH_SIZE = 30
 
     for i in range(0, len(cards_to_process), CARD_UPDATE_BATCH_SIZE):
@@ -380,22 +375,23 @@ def update_cards():
 
         print(f"Processo batch {int(i/CARD_UPDATE_BATCH_SIZE) + 1}/{(len(cards_to_process) + CARD_UPDATE_BATCH_SIZE - 1) // CARD_UPDATE_BATCH_SIZE}... ({len(batch_slugs)} carte)")
 
-        # Costruisci ed esegui la query GraphQL raggruppata
-        batched_query = build_batched_card_details_query(batch_slugs)
-        batched_details_data = sorare_graphql_fetch(batched_query)
+        variables = {"slugs": batch_slugs}
+        batched_details_data = sorare_graphql_fetch(BATCH_CARD_DETAILS_QUERY, variables)
 
         if not batched_details_data or "errors" in batched_details_data or not batched_details_data.get("data"):
             print("Errore nel recuperare il batch di dati, passo al successivo.")
             time.sleep(1)
             continue
 
-        # Processa i risultati del batch
-        for j, original_record in enumerate(batch_records):
-            alias = f"card{j}"
-            card_details = batched_details_data["data"].get(alias)
+        # La risposta è una lista di carte. Creiamo una mappa per un accesso veloce.
+        results_map = {card['slug']: card for card in batched_details_data["data"].get('cards', [])}
+
+        for original_record in batch_records:
+            card_slug = original_record['Slug']
+            card_details = results_map.get(card_slug)
 
             if not card_details:
-                print(f"Dati non trovati per {original_record['Slug']} nell'alias {alias}")
+                print(f"Dati non trovati per {card_slug} nella risposta del batch.")
                 continue
 
             player_info = card_details.get("player")
@@ -414,9 +410,8 @@ def update_cards():
                 'values': [updated_row_values],
             })
 
-        time.sleep(1) # Pausa tra un batch e l'altro
+        time.sleep(1)
 
-    # 4. Aggiornamento finale su Google Sheets
     if updates_for_gsheet:
         print(f"Invio di {len(updates_for_gsheet)} aggiornamenti al foglio Google...")
         try:
@@ -426,7 +421,7 @@ def update_cards():
 
     print("Esecuzione completata.")
     execution_time = time.time() - start_time
-    send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (BATCH)</b>\n\n⏱️ Tempo: {execution_time:.2f}s\n🔄 Carte: {len(cards_to_process)}")
+    send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (BATCH V2)</b>\n\n⏱️ Tempo: {execution_time:.2f}s\n🔄 Carte: {len(cards_to_process)}")
 def update_sales():
     print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (MODALITÀ DATABASE) ---")
     start_time, state = time.time(), load_state()
