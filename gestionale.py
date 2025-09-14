@@ -53,7 +53,7 @@ ALL_CARDS_QUERY = """
     }
 """
 PLAYER_TOKEN_PRICES_QUERY = """
-    query GetPlayerTokenPrices($playerSlug: String!, $rarity: String!, $limit: Int!) {
+    query GetPlayerTokenPrices($playerSlug: String!, $rarity: Rarity!, $limit: Int!) {
         tokens {
             tokenPrices(playerSlug: $playerSlug, rarity: $rarity, first: $limit, includePrivateSales: true) {
                 amounts { eurCents }
