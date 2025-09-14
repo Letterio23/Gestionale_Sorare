@@ -3,8 +3,8 @@ name: Aggiornamento Dati Principale
 on:
   workflow_dispatch:
   schedule:
-    # Esegui all'inizio di ogni ora
-    - cron: '0 * * * *'
+    # Esegui ogni 15 minuti
+    - cron: '*/15 * * * *'
 
 permissions:
   contents: write
