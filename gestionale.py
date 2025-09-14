@@ -48,46 +48,37 @@ PLAYER_TOKEN_PRICES_QUERY = """
     }
 """
 PRICE_FRAGMENT = "liveSingleSaleOffer { receiverSide { amounts { eurCents, usdCents, gbpCents, wei, referenceCurrency } } }"
-BATCH_CARD_DETAILS_QUERY = f"""
-query GetBatchedCardDetails($slugs: [String!]!) {{
-    cards(slugs: $slugs) {{
-        slug
-        rarity
-        grade
-        xp
-        xpNeededForNextGrade
-        pictureUrl
-        inSeasonEligible
-        secondaryMarketFeeEnabled
-        liveSingleSaleOffer {{ receiverSide {{ amounts {{ eurCents, usdCents, gbpCents, wei, referenceCurrency }} }} }}
-        player {{
-            slug
-            displayName
-            position
-            lastFiveSo5Appearances
-            lastFifteenSo5Appearances
-            playerGameScores(last: 15) {{ score }}
-            activeInjuries {{ status, expectedEndDate }}
-            activeSuspensions {{ reason, endDate }}
-            activeClub {{ name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
-            u23Eligible
-            L_ANY: lowestPriceAnyCard(rarity: limited, inSeason: false) {{ {PRICE_FRAGMENT} }}
-            L_IN: lowestPriceAnyCard(rarity: limited, inSeason: true) {{ {PRICE_FRAGMENT} }}
-            R_ANY: lowestPriceAnyCard(rarity: rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
-            R_IN: lowestPriceAnyCard(rarity: rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
-            SR_ANY: lowestPriceAnyCard(rarity: super_rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
-            SR_IN: lowestPriceAnyCard(rarity: super_rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
+OPTIMIZED_CARD_DETAILS_QUERY = f"""
+    query GetOptimizedCardDetails($cardSlug: String!) {{
+        anyCard(slug: $cardSlug) {{
+            ... on Card {{
+                rarity, grade, xp, xpNeededForNextGrade, pictureUrl, inSeasonEligible, secondaryMarketFeeEnabled
+                liveSingleSaleOffer {{ receiverSide {{ amounts {{ eurCents, usdCents, gbpCents, wei, referenceCurrency }} }} }}
+                player {{
+                    slug, displayName, position, lastFiveSo5Appearances, lastFifteenSo5Appearances
+                    playerGameScores(last: 15) {{ score }}
+                    activeInjuries {{ status, expectedEndDate }}
+                    activeSuspensions {{ reason, endDate }}
+                    activeClub {{ name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
+                    u23Eligible
+                    L_ANY: lowestPriceAnyCard(rarity: limited, inSeason: false) {{ {PRICE_FRAGMENT} }}
+                    L_IN: lowestPriceAnyCard(rarity: limited, inSeason: true) {{ {PRICE_FRAGMENT} }}
+                    R_ANY: lowestPriceAnyCard(rarity: rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
+                    R_IN: lowestPriceAnyCard(rarity: rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
+                    SR_ANY: lowestPriceAnyCard(rarity: super_rare, inSeason: false) {{ {PRICE_FRAGMENT} }}
+                    SR_IN: lowestPriceAnyCard(rarity: super_rare, inSeason: true) {{ {PRICE_FRAGMENT} }}
+                }}
+            }}
         }}
     }}
-}}
 """
 PROJECTION_QUERY = """
     query GetProjection($playerSlug: String!, $gameId: ID!) {
         football {
             player(slug: $playerSlug) {
                 playerGameScore(gameId: $gameId) {
-                    projection { grade score reliabilityBasisPoints }
-                    anyPlayerGameStats { ... on PlayerGameStats { footballPlayingStatusOdds { starterOddsBasisPoints } } }
+                    projection {{ grade score reliabilityBasisPoints }}
+                    anyPlayerGameStats {{ ... on PlayerGameStats {{ footballPlayingStatusOdds {{ starterOddsBasisPoints }} }} }}
                 }
             }
         }
@@ -246,7 +237,6 @@ def sync_galleria():
         spreadsheet = gc.open_by_key(SPREADSHEET_ID)
         try:
             sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
-            # Verifica e aggiungi header se mancano
             if not sheet.row_values(1):
                  sheet.update(range_name='A1', values=[MAIN_SHEET_HEADERS])
                  sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))}', {'textFormat': {'bold': True}})
@@ -318,9 +308,10 @@ def sync_galleria():
     print(message)
     send_telegram_notification(message)
 def update_cards():
-    print("--- INIZIO AGGIORNAMENTO DATI CARTE (OTTIMIZZATO CON BATCH V2) ---")
-    start_time = time.time()
-
+    print("--- INIZIO AGGIORNAMENTO DATI CARTE (OTTIMIZZATO) ---")
+    start_time, state = time.time(), load_state()
+    continuation_data = state.get('update_cards_continuation', {})
+    start_index = continuation_data.get('last_index', 0)
     try:
         credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
         gc = gspread.service_account_from_dict(credentials)
@@ -329,99 +320,68 @@ def update_cards():
     except Exception as e:
         print(f"ERRORE CRITICO GSheets: {e}")
         return
-
-    try:
-        all_sheet_records = sheet.get_all_records()
-    except gspread.exceptions.GSpreadException as e:
-        print(f"Attenzione: il foglio '{MAIN_SHEET_NAME}' sembra vuoto. Impossibile aggiornare. Dettagli: {e}")
-        return
-
-    cutoff_time = datetime.now() - timedelta(hours=CARD_DATA_UPDATE_INTERVAL_HOURS)
-    cards_to_process = []
-    for i, record in enumerate(all_sheet_records):
-        record['row_index'] = i + 2
-        needs_update = False
-        if not record.get('Slug'): continue
-
-        projection_grade = record.get('Projection Grade', '').strip()
-        last_update_str = record.get('Ultimo Aggiornamento', '').strip()
-
-        if not last_update_str or not projection_grade:
-            needs_update = True
-        else:
-            try:
-                if datetime.strptime(last_update_str, '%Y-%m-%d %H:%M:%S') < cutoff_time:
-                    needs_update = True
-            except ValueError:
-                needs_update = True
-
-        if needs_update:
-            cards_to_process.append(record)
-
-    if not cards_to_process:
-        print("Nessuna carta da aggiornare.")
-        return
-
-    print(f"Identificate {len(cards_to_process)} carte da aggiornare.")
-
     rates = {"eth_to_eur": get_eth_rate()}
     rates.update(get_currency_rates())
-    updates_for_gsheet = []
-    CARD_UPDATE_BATCH_SIZE = 30
-
-    for i in range(0, len(cards_to_process), CARD_UPDATE_BATCH_SIZE):
-        batch_records = cards_to_process[i:i + CARD_UPDATE_BATCH_SIZE]
-        batch_slugs = [record['Slug'] for record in batch_records]
-
-        print(f"Processo batch {int(i/CARD_UPDATE_BATCH_SIZE) + 1}/{(len(cards_to_process) + CARD_UPDATE_BATCH_SIZE - 1) // CARD_UPDATE_BATCH_SIZE}... ({len(batch_slugs)} carte)")
-
-        variables = {"slugs": batch_slugs}
-        batched_details_data = sorare_graphql_fetch(BATCH_CARD_DETAILS_QUERY, variables)
-
-        if not batched_details_data or "errors" in batched_details_data or not batched_details_data.get("data"):
-            print("Errore nel recuperare il batch di dati, passo al successivo.")
+    if start_index == 0:
+        print("Avvio nuova sessione...")
+        all_sheet_records = sheet.get_all_records()
+        cutoff_time = datetime.now() - timedelta(hours=CARD_DATA_UPDATE_INTERVAL_HOURS)
+        cards_to_process = []
+        for i, record in enumerate(all_sheet_records):
+            record['row_index'] = i + 2
+            last_update_str = record.get('Ultimo Aggiornamento', '').strip()
+            if not last_update_str:
+                cards_to_process.append(record)
+                continue
+            try:
+                if datetime.strptime(last_update_str, '%Y-%m-%d %H:%M:%S') < cutoff_time:
+                    cards_to_process.append(record)
+            except ValueError:
+                cards_to_process.append(record)
+        print(f"Identificate {len(cards_to_process)} carte da aggiornare.")
+        continuation_data['cards_to_process'] = cards_to_process
+    else:
+        print(f"Ripresa sessione dall'indice {start_index}.")
+        cards_to_process = continuation_data.get('cards_to_process', [])
+    if not cards_to_process:
+        print("Nessuna carta da aggiornare.")
+        if 'update_cards_continuation' in state: del state['update_cards_continuation']
+        save_state(state)
+        return
+    for i in range(start_index, len(cards_to_process)):
+        if time.time() - start_time > 300:
+            print(f"Timeout imminente. Salvo stato all'indice {i}.")
+            continuation_data['last_index'] = i
+            state['update_cards_continuation'] = continuation_data
+            save_state(state)
+            return
+        card_to_update = cards_to_process[i]
+        card_slug = card_to_update.get('Slug')
+        if not card_slug: continue
+        print(f"Aggiorno carta ({i+1}/{len(cards_to_process)}): {card_slug}")
+        details_data = sorare_graphql_fetch(OPTIMIZED_CARD_DETAILS_QUERY, {"cardSlug": card_slug})
+        if not details_data or not details_data.get("data", {}).get("anyCard"):
             time.sleep(1)
             continue
-
-        # La risposta è una lista di carte. Creiamo una mappa per un accesso veloce.
-        results_map = {card['slug']: card for card in batched_details_data["data"].get('cards', [])}
-
-        for original_record in batch_records:
-            card_slug = original_record['Slug']
-            card_details = results_map.get(card_slug)
-
-            if not card_details:
-                print(f"Dati non trovati per {card_slug} nella risposta del batch.")
-                continue
-
-            player_info = card_details.get("player")
-            player_slug = player_info.get("slug") if player_info else None
-
-            game_id = None
-            if player_info and player_info.get("activeClub") and player_info["activeClub"].get("upcomingGames"):
-                game_id = player_info["activeClub"]["upcomingGames"][0].get("id")
-
-            projection_data = fetch_projection(player_slug, game_id)
-
-            updated_row_values = build_updated_card_row(original_record, card_details, player_info, projection_data, rates)
-
-            updates_for_gsheet.append({
-                'range': f'A{original_record["row_index"]}',
-                'values': [updated_row_values],
-            })
-
-        time.sleep(1)
-
-    if updates_for_gsheet:
-        print(f"Invio di {len(updates_for_gsheet)} aggiornamenti al foglio Google...")
+        card_details = details_data["data"]["anyCard"]
+        player_info = card_details.get("player")
+        player_slug = player_info.get("slug") if player_info else None
+        upcoming_games = []
+        if player_info and player_info.get("activeClub"):
+            upcoming_games = player_info.get("activeClub", {}).get("upcomingGames", [])
+        game_id = upcoming_games[0].get("id") if upcoming_games else None
+        projection_data = fetch_projection(player_slug, game_id)
+        updated_row = build_updated_card_row(card_to_update, card_details, player_info, projection_data, rates)
         try:
-            sheet.batch_update(updates_for_gsheet, value_input_option='USER_ENTERED')
+            sheet.update(range_name=f'A{card_to_update["row_index"]}', values=[updated_row], value_input_option='USER_ENTERED')
         except Exception as e:
-            print(f"ERRORE CRITICO durante il batch_update su GSheets: {e}")
-
-    print("Esecuzione completata.")
+            print(f"Errore aggiornamento riga per {card_slug}: {e}")
+        time.sleep(1)
+    print("Esecuzione completata. Pulizia dello stato.")
+    if 'update_cards_continuation' in state: del state['update_cards_continuation']
+    save_state(state)
     execution_time = time.time() - start_time
-    send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (BATCH V2)</b>\n\n⏱️ Tempo: {execution_time:.2f}s\n🔄 Carte: {len(cards_to_process)}")
+    send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\n\n⏱️ Tempo: {execution_time:.2f}s")
 def update_sales():
     print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (MODALITÀ DATABASE) ---")
     start_time, state = time.time(), load_state()
@@ -464,12 +424,11 @@ def update_sales():
     new_rows_to_append = []
 
     for i in range(start_index, len(pairs_to_process)):
-        if time.time() - start_time > 300:
+        if time.time() - start_time > 480: # Aumentato a 8 minuti per sicurezza
             print(f"Timeout imminente. Salvo stato all'indice {i}.")
             continuation_data['last_index'] = i
             state['update_sales_continuation'] = continuation_data
             save_state(state)
-            # Esegui gli aggiornamenti raccolti prima di uscire
             if updates_to_batch: sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
             if new_rows_to_append: sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
             return
@@ -514,7 +473,6 @@ def update_sales():
             updates_to_batch.append({'range': f'A{existing_info["row_index"]}', 'values': [updated_row]})
         else:
             new_rows_to_append.append(updated_row)
-            # Aggiungi una placeholder per evitare di riprocessare nello stesso ciclo
             existing_sales_map[key] = {'row_index': 'new'}
 
         time.sleep(1)
