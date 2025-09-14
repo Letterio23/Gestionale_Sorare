@@ -54,6 +54,15 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python gestionale.py update_sales
 
+      - name: "PASSO 4: Verifica Formazioni Schierate"
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SORARE_API_KEY: ${{ secrets.SORARE_API_KEY }}
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          USER_SLUG: ${{ secrets.USER_SLUG }}
+        run: python check_lineups.py
+
       - name: Salva lo stato (se modificato)
         run: |
           git config --global user.name 'github-actions[bot]'
