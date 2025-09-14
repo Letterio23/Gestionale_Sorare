@@ -216,7 +216,7 @@ def initial_setup():
 def update_cards():
     print("--- INIZIO AGGIORNAMENTO DATI CARTE (OTTIMIZZATO) ---")
     start_time, state = time.time(), load_state()
-    continuation_data, start_index = state.get('update_cards_continuation', {}), continuation_data.get('last_index', 0)
+    continuation_data = state.get('update_cards_continuation', {}) start_index = continuation_data.get('last_index', 0)
     try:
         credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
         gc = gspread.service_account_from_dict(credentials)
