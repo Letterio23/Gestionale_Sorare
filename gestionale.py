@@ -19,7 +19,6 @@ API_URL = "https://api.sorare.com/graphql"
 MAIN_SHEET_NAME = "Foglio1"
 SALES_HISTORY_SHEET_NAME = "Cronologia Vendite"
 STATE_FILE = "state.json"
-
 BATCH_SIZE = 15
 
 MAIN_SHEET_HEADERS = [
@@ -36,7 +35,7 @@ MAIN_SHEET_HEADERS = [
 ALL_CARDS_QUERY = """
     query AllCardsFromUser($userSlug: String!, $rarities: [Rarity!], $cursor: String) {
         user(slug: $userSlug) {
-            cards(rarities: $rarities, after: $cursor) {
+            cards(rarities: $rarities, after: $cursor, first: 50) {
                 nodes {
                     slug
                     rarity
@@ -89,9 +88,7 @@ def send_telegram_notification(text):
     except Exception as e:
         print(f"Errore invio notifica Telegram: {e}")
 
-# --- [AGGIUNTE] FUNZIONI HELPER MANCANTI ---
 def get_eth_rate():
-    """Ottiene il tasso di cambio ETH/EUR."""
     try:
         response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=eur", timeout=5)
         response.raise_for_status()
@@ -101,15 +98,12 @@ def get_eth_rate():
         return 3000.0
 
 def calculate_eur_price(price_object, rates):
-    """Calcola il prezzo in EUR da un oggetto 'amounts' dell'API."""
     if not price_object or not rates: return ""
     try:
         amounts = price_object.get('liveSingleSaleOffer', {}).get('receiverSide', {}).get('amounts')
         if not amounts: return ""
-        
         amounts_data = amounts[0] if isinstance(amounts, list) else amounts
         currency = amounts_data.get('referenceCurrency', '').lower()
-        
         if currency == 'eur':
             return amounts_data.get('eurCents', 0) / 100
         elif currency in ['eth', 'wei']:
@@ -120,7 +114,6 @@ def calculate_eur_price(price_object, rates):
 
 # --- 4. FUNZIONI PRINCIPALI DEL GESTIONALE ---
 def initial_setup():
-    """Popola il foglio principale con tutte le carte e le intestazioni corrette."""
     print("--- INIZIO PRIMO AGGIORNAMENTO COMPLETO ---")
     
     try:
@@ -133,11 +126,11 @@ def initial_setup():
         except gspread.WorksheetNotFound:
             sheet = spreadsheet.add_worksheet(title=MAIN_SHEET_NAME, rows="1000", cols=len(MAIN_SHEET_HEADERS))
         
-        sheet.update('A1', [MAIN_SHEET_HEADERS])
-        sheet.format('A1:{}'.format(gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))), {'textFormat': {'bold': True}})
+        sheet.update(range_name='A1', values=[MAIN_SHEET_HEADERS])
+        sheet.format(f'A1:{gspread.utils.rowcol_to_a1(1, len(MAIN_SHEET_HEADERS))}', {'textFormat': {'bold': True}})
         print(f"Foglio '{MAIN_SHEET_NAME}' preparato con tutte le intestazioni.")
     except Exception as e:
-        print(f"ERRORE CRITICO durante l'accesso a Google Sheets: {e}")
+        print(f"ERRORE CRITICO GSheets: {e}")
         return
 
     print("Recupero di tutte le carte dall'API di Sorare...")
@@ -147,8 +140,8 @@ def initial_setup():
     while has_next_page:
         variables = {"userSlug": USER_SLUG, "rarities": ["limited", "rare", "super_rare", "unique"], "cursor": cursor}
         data = sorare_graphql_fetch(ALL_CARDS_QUERY, variables)
-        if not data or not data.get("data") or not data["data"].get("user") or not data["data"]["user"].get("cards"):
-            print("Risposta API non valida. Interruzione.")
+        if not data or "errors" in data or not data.get("data", {}).get("user", {}).get("cards"):
+            print("Risposta API non valida o con errori. Interruzione.")
             break
         
         cards_data = data["data"]["user"]["cards"]
@@ -176,26 +169,23 @@ def initial_setup():
         data_to_write.append([record[header] for header in MAIN_SHEET_HEADERS])
 
     if data_to_write:
-        sheet.update('A2', data_to_write, value_input_option='USER_ENTERED')
+        sheet.update(range_name='A2', values=data_to_write, value_input_option='USER_ENTERED')
         print(f"Il foglio '{MAIN_SHEET_NAME}' è stato popolato con {len(all_cards)} carte.")
     else:
         print("Nessuna carta trovata da scrivere.")
     send_telegram_notification(f"✅ <b>Primo Avvio Completato (GitHub)</b>\n\nIl foglio contiene {len(all_cards)} carte.")
 
 def update_cards():
-    """Placeholder per la traduzione di updateAllCardData_V3."""
     print("--- INIZIO AGGIORNAMENTO DATI CARTE ---")
     print("Funzione 'update_cards' non ancora implementata.")
-    send_telegram_notification("✅ <b>Dati Carte Aggiornati (da GitHub) - Placeholder</b>")
+    send_telegram_notification("✅ <b>Dati Carte Aggiornati (GitHub) - Placeholder</b>")
 
 def update_sales():
-    """Placeholder per la traduzione di updatePlayerSalesHistory_V3."""
     print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE ---")
     print("Funzione 'update_sales' non ancora implementata.")
-    send_telegram_notification("✅ <b>Cronologia Vendite Aggiornata (da GitHub) - Placeholder</b>")
+    send_telegram_notification("✅ <b>Cronologia Vendite Aggiornata (GitHub) - Placeholder</b>")
 
 def update_floors():
-    """Traduzione completa di updateFloorPrices_V3."""
     print("--- INIZIO AGGIORNAMENTO FLOOR PRICES ---")
     start_time = time.time()
     
@@ -256,7 +246,6 @@ def update_floors():
         print("Aggiornamento del foglio Google in corso...")
         all_sheet_values = sheet.get_all_values()
         headers = all_sheet_values[0]
-        
         slug_col_idx_header = headers.index("Player API Slug")
         target_columns_indices = {
             "FLOOR IN SEASON LIMITED": headers.index("FLOOR IN SEASON LIMITED"),
@@ -274,7 +263,7 @@ def update_floors():
                     if price_value is not None:
                         updated_sheet_values[row_idx][col_idx] = price_value
         
-        sheet.update('A1', updated_sheet_values, value_input_option='USER_ENTERED')
+        sheet.update(range_name='A1', values=updated_sheet_values, value_input_option='USER_ENTERED')
         print("Aggiornamento del foglio completato.")
     except Exception as e:
         print(f"ERRORE durante l'aggiornamento del foglio: {e}")
@@ -297,7 +286,6 @@ if __name__ == "__main__":
         elif function_to_run == "update_sales":
             update_sales()
         elif function_to_run == "update_floors":
-            # --- [CORRETTO] ORA CHIAMA LA FUNZIONE CORRETTA ---
             update_floors()
         else:
             print(f"Errore: Funzione '{function_to_run}' non riconosciuta.")
