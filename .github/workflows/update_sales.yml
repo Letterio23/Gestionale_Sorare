@@ -1,0 +1,23 @@
+name: 2. Aggiorna Cronologia Vendite
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Esegui ogni 30 minuti, tra le 7 e le 22 UTC
+    - cron: '*/30 7-22 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  run-gestionale:
+    runs-on: ubuntu-latest
+    steps:
+      # ... (steps identici al precedente)
+      - name: Esegui lo script gestionale
+        env:
+          # ... (tutti i segreti necessari)
+        run: python gestionale.py update_sales
+      - name: Salva lo stato
+        run: |
+          # ... (logica di commit del file state.json)
