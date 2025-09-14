@@ -339,15 +339,19 @@ def update_cards():
         api_card_slugs = {card['slug'] for card in api_cards}
         
         cutoff_time = datetime.now() - timedelta(hours=CARD_DATA_UPDATE_INTERVAL_HOURS)
-        cards_to_process = []
-        for i, record in enumerate(all_sheet_records):
-            record['row_index'] = i + 2
-            last_update_str = record.get('Ultimo Aggiornamento')
-            try:
-                if not last_update_str or datetime.strptime(last_update_str, '%Y-%m-%d %H:%M:%S') < cutoff_time:
-                    cards_to_process.append(record)
-            except ValueError:
-                cards_to_process.append(record)
+		cards_to_process = []
+		for i, record in enumerate(all_sheet_records):
+  		  record['row_index'] = i + 2
+   		  last_update_str = record.get('Ultimo Aggiornamento')
+    
+		    # --- MODIFICA CHIAVE QUI ---
+		    # Sostituiamo la logica complessa con una semplice istruzione
+		    # per forzare l'aggiornamento di ogni carta
+		    if True: 
+		    # ---------------------------
+		        cards_to_process.append(record)
+		            except ValueError:
+		                cards_to_process.append(record)
         
         print(f"Identificate {len(cards_to_process)} carte da aggiornare.")
         continuation_data['cards_to_process'] = cards_to_process
