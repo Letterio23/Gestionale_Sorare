@@ -77,8 +77,8 @@ PROJECTION_QUERY = """
         football {
             player(slug: $playerSlug) {
                 playerGameScore(gameId: $gameId) {
-                    projection {{ grade score reliabilityBasisPoints }}
-                    anyPlayerGameStats {{ ... on PlayerGameStats {{ footballPlayingStatusOdds {{ starterOddsBasisPoints }} }} }}
+                    projection { grade score reliabilityBasisPoints }
+                    anyPlayerGameStats { footballPlayingStatusOdds { starterOddsBasisPoints } }
                 }
             }
         }
