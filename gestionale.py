@@ -64,16 +64,16 @@ def save_state(state_data):
 def sorare_graphql_fetch(query, variables={}):
     """Funzione generica per le chiamate API a Sorare con header completi."""
     payload = {"query": query, "variables": variables}
-    # --- [MODIFICA CHIAVE] Uso degli header completi ---
+    # --- [MODIFICA CHIAVE] Aggiunto header X-Sorare-ApiVersion ---
     headers = {
         "APIKEY": SORARE_API_KEY,
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
-		"X-Sorare-ApiVersion": "v1"
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-Sorare-ApiVersion": "v1"
     }
-    # ----------------------------------------------------
+    # -------------------------------------------------------------
     try:
         response = requests.post(API_URL, json=payload, headers=headers, timeout=20)
         response.raise_for_status()
