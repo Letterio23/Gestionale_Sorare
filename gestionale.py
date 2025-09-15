@@ -6,7 +6,6 @@ import json
 import time
 from datetime import datetime, timedelta
 import gspread
-
 # --- 1. CONFIGURAZIONE ---
 SORARE_API_KEY = os.environ.get("SORARE_API_KEY")
 USER_SLUG = os.environ.get("USER_SLUG")
@@ -24,7 +23,6 @@ MAX_SALES_FROM_API = 7
 INITIAL_SALES_FETCH_COUNT = 20
 CARD_DATA_UPDATE_INTERVAL_HOURS = 0.5
 MAIN_SHEET_HEADERS = ["Slug", "Rarity", "Player Name", "Player API Slug", "Position", "U23 Eligible?", "Livello", "In Season?", "XP Corrente", "XP Prox Livello", "XP Mancanti Livello", "Sale Price (EUR)", "FLOOR CLASSIC LIMITED", "FLOOR CLASSIC RARE", "FLOOR CLASSIC SR", "FLOOR IN SEASON LIMITED", "FLOOR IN SEASON RARE", "FLOOR IN SEASON SR", "L5 So5 (%)", "L15 So5 (%)", "Avg So5 Score (3)", "Avg So5 Score (5)", "Avg So5 Score (15)", "Last 5 SO5 Scores", "Partita", "Data Prossima Partita", "Next Game API ID", "Projection Grade", "Projected Score", "Projection Reliability (%)", "Starter Odds (%)", "Fee Abilitata?", "Infortunio", "Squalifica", "Ultimo Aggiornamento", "Owner Since", "Foto URL"]
-
 # --- 2. QUERY GRAPHQL ---
 ALL_CARDS_QUERY = """
     query AllCardsFromUser($userSlug: String!, $rarities: [Rarity!], $cursor: String) {
@@ -59,8 +57,7 @@ OPTIMIZED_CARD_DETAILS_QUERY = f"""
                     playerGameScores(last: 15) {{ score }}
                     activeInjuries {{ status, expectedEndDate }}
                     activeSuspensions {{ reason, endDate }}
-                    activeClub {{ __typename, name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
-                    nationalTeam {{ __typename, name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
+                    activeClub {{ name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
                     u23Eligible
                     L_ANY: lowestPriceAnyCard(rarity: limited, inSeason: false) {{ {PRICE_FRAGMENT} }}
                     L_IN: lowestPriceAnyCard(rarity: limited, inSeason: true) {{ {PRICE_FRAGMENT} }}
@@ -85,7 +82,6 @@ PROJECTION_QUERY = """
         }
     }
 """
-
 # --- 3. FUNZIONI HELPER ---
 def load_state():
     try:
@@ -190,54 +186,16 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
             end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00")).strftime('%d/%m/%y')
             record["Squalifica"] = f"{suspensions[0].get('reason', 'Squalificato')} fino al {end_date}"
     else: record["Squalifica"] = ""
-    # Logica per determinare la prossima partita (Club vs Nazionale)
-    club_game_list = player_info.get("activeClub", {}).get("upcomingGames", [])
-    national_team_info = player_info.get("nationalTeam")
-    national_game_list = national_team_info.get("upcomingGames", []) if national_team_info else []
-
-    club_game = club_game_list[0] if club_game_list else None
-    national_game = national_game_list[0] if national_game_list else None
-
-    next_game = None
-    team_context = None
-
-    if club_game and national_game:
-        club_date = datetime.fromisoformat(club_game['date'].replace("Z", "+00:00"))
-        national_date = datetime.fromisoformat(national_game['date'].replace("Z", "+00:00"))
-        if club_date < national_date:
-            next_game = club_game
-            team_context = player_info.get("activeClub")
-        else:
-            next_game = national_game
-            team_context = national_team_info
-    elif club_game:
-        next_game = club_game
-        team_context = player_info.get("activeClub")
-    elif national_game:
-        next_game = national_game
-        team_context = national_team_info
-
-    if next_game and team_context and next_game.get('date'):
-        game_date = datetime.fromisoformat(next_game['date'].replace("Z", "+00:00")).strftime('%d-%m-%y %H:%M')
-        home = next_game.get("homeTeam", {}).get("name", "")
-        away = next_game.get("awayTeam", {}).get("name", "")
-        comp = next_game.get("competition", {}).get("displayName", "")
-
-        record["Data Prossima Partita"] = game_date
-        record["Next Game API ID"] = next_game.get("id", "")
-
-        # Uso __typename per distinguere Club da NationalTeam
-        team_type = team_context.get("__typename", "")
-        team_name = team_context.get("name", "")
-
-        if "NationalTeam" in team_type:
-            record["Partita"] = f"🌍 {home} vs {away} [{comp}]"
-        elif home == team_name:
-            record["Partita"] = f"🏠 {home} vs {away} [{comp}]"
-        else:
-            record["Partita"] = f"✈️ {home} vs {away} [{comp}]"
-    else:
-        record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
+    club = player_info.get("activeClub")
+    if club and club.get("upcomingGames"):
+        game = club["upcomingGames"][0]
+        if game and game.get('date'):
+            game_date = datetime.fromisoformat(game['date'].replace("Z", "+00:00")).strftime('%d-%m-%y %H:%M')
+            home, away, comp = game.get("homeTeam", {}).get("name", ""), game.get("awayTeam", {}).get("name", ""), game.get("competition", {}).get("displayName", "")
+            record["Data Prossima Partita"], record["Next Game API ID"] = game_date, game.get("id", "")
+            record["Partita"] = f"🏠 vs {away} [{comp}]" if home == club.get("name") else f"✈️ vs {home} [{comp}]"
+        else: record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Data non disp.", "", ""
+    else: record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
     record["Ultimo Aggiornamento"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return [record.get(header, '') for header in MAIN_SHEET_HEADERS]
 def build_sales_history_row(name, slug, rarity, all_sales, headers):
@@ -266,7 +224,6 @@ def build_sales_history_row(name, slug, rarity, all_sales, headers):
             out_row_map[f"Sale {j+1} Date"], out_row_map[f"Sale {j+1} Price (EUR)"], out_row_map[f"Sale {j+1} Eligibility"] = "", "", ""
     out_row_map["Last Updated"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return [out_row_map.get(h, '') for h in headers]
-
 # --- 4. FUNZIONI PRINCIPALI ---
 def sync_galleria():
     print("--- INIZIO SINCRONIZZAZIONE GALLERIA ---")
@@ -287,7 +244,6 @@ def sync_galleria():
     except Exception as e:
         print(f"ERRORE CRITICO GSheets in sync_galleria: {e}")
         return
-
     print("Recupero di tutte le carte dall'API di Sorare...")
     api_cards = []
     cursor, has_next_page = None, True
@@ -301,10 +257,8 @@ def sync_galleria():
         page_info = cards_data.get("pageInfo", {})
         has_next_page, cursor = page_info.get("hasNextPage", False), page_info.get("endCursor")
         if has_next_page: time.sleep(1)
-
     api_card_slugs = {card['slug'] for card in api_cards}
     print(f"Recupero completato. Trovate {len(api_card_slugs)} carte uniche in totale.")
-
     print("Leggo le carte presenti nel foglio Google...")
     try:
         sheet_records = sheet.get_all_records()
@@ -313,10 +267,8 @@ def sync_galleria():
         print(f"Attenzione: il foglio '{MAIN_SHEET_NAME}' sembra vuoto o malformato. Verrà trattato come vuoto. Dettagli: {e}")
         sheet_card_slugs = {}
     print(f"Trovate {len(sheet_card_slugs)} carte nel foglio.")
-
     slugs_to_add = api_card_slugs - sheet_card_slugs.keys()
     slugs_to_delete = sheet_card_slugs.keys() - api_card_slugs
-
     if slugs_to_delete:
         rows_to_delete = sorted([sheet_card_slugs[slug]['row_index'] for slug in slugs_to_delete], reverse=True)
         print(f"Rimozione di {len(rows_to_delete)} righe...")
@@ -326,7 +278,6 @@ def sync_galleria():
                 time.sleep(1.5)
             except Exception as e:
                 print(f"Errore durante la rimozione della riga {row_index}: {e}")
-
     if slugs_to_add:
         new_cards_data = [card for card in api_cards if card['slug'] in slugs_to_add]
         data_to_write = []
@@ -338,11 +289,9 @@ def sync_galleria():
             record["Player Name"], record["Player API Slug"] = player.get("displayName", ""), player.get("slug", "")
             record["Position"], record["U23 Eligible?"] = player.get("position", ""), "Sì" if player.get("u23Eligible") else "No"
             data_to_write.append([record.get(header, '') for header in MAIN_SHEET_HEADERS])
-
         if data_to_write:
             print(f"Aggiunta di {len(data_to_write)} nuove carte al foglio...")
             sheet.append_rows(data_to_write, value_input_option='USER_ENTERED')
-
     message = f"✅ <b>Sincronizzazione Galleria Completata</b>\n\nGalleria: {len(api_card_slugs)} carte\n➕ Aggiunte: {len(slugs_to_add)}\n➖ Rimosse: {len(slugs_to_delete)}"
     print(message)
     send_telegram_notification(message)
@@ -438,7 +387,6 @@ def update_sales():
     except Exception as e:
         print(f"ERRORE CRITICO GSheets: {e}")
         return
-
     if start_index == 0:
         print("Avvio nuova sessione...")
         main_records = main_sheet.get_all_records()
@@ -455,13 +403,10 @@ def update_sales():
         except gspread.exceptions.GSpreadException as e:
             print(f"Attenzione: il foglio '{SALES_HISTORY_SHEET_NAME}' sembra vuoto o malformato. Verrà trattato come vuoto. Dettagli: {e}")
             continuation_data['existing_sales_map'] = {}
-
     pairs_to_process = continuation_data.get('pairs_to_process', [])
     existing_sales_map = continuation_data.get('existing_sales_map', {})
-
     updates_to_batch = []
     new_rows_to_append = []
-
     for i in range(start_index, len(pairs_to_process)):
         if time.time() - start_time > 480: # Aumentato a 8 minuti per sicurezza
             print(f"Timeout imminente. Salvo stato all'indice {i}.")
@@ -471,19 +416,16 @@ def update_sales():
             if updates_to_batch: sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
             if new_rows_to_append: sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
             return
-
         pair = pairs_to_process[i]
         key = f"{pair['slug']}::{pair['rarity']}"
         print(f"Processo ({i+1}/{len(pairs_to_process)}): {key}")
         existing_info = existing_sales_map.get(key)
         sales_to_fetch = MAX_SALES_FROM_API if existing_info else INITIAL_SALES_FETCH_COUNT
-
         api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {"playerSlug": pair['slug'], "rarity": pair['rarity'], "limit": sales_to_fetch})
         new_sales_from_api = []
         if api_data and api_data.get("data") and not api_data.get("errors"):
             for sale in api_data["data"].get("tokens", {}).get("tokenPrices", []):
                 new_sales_from_api.append({"timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000, "price": sale['amounts']['eurCents'] / 100, "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"})
-
         old_sales_from_sheet = []
         if existing_info:
             record = existing_info['record']
@@ -493,9 +435,7 @@ def update_sales():
                     try:
                         old_sales_from_sheet.append({"timestamp": datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000, "price": float(str(price_val).replace(",", ".")), "seasonEligibility": record.get(f"Sale {j} Eligibility")})
                     except (ValueError, TypeError): continue
-
         combined_sales = sorted(list({int(s['timestamp']): s for s in old_sales_from_sheet + new_sales_from_api}.values()), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
-
         headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
         if not headers:
              exp_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
@@ -505,25 +445,19 @@ def update_sales():
              exp_headers.append("Last Updated")
              sales_sheet.update('A1', [exp_headers])
              headers = exp_headers
-
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
-
         if existing_info:
             updates_to_batch.append({'range': f'A{existing_info["row_index"]}', 'values': [updated_row]})
         else:
             new_rows_to_append.append(updated_row)
             existing_sales_map[key] = {'row_index': 'new'}
-
         time.sleep(1)
-
     if updates_to_batch:
         print(f"Invio {len(updates_to_batch)} aggiornamenti a '{SALES_HISTORY_SHEET_NAME}'...")
         sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
-
     if new_rows_to_append:
         print(f"Aggiunta di {len(new_rows_to_append)} nuove righe a '{SALES_HISTORY_SHEET_NAME}'...")
         sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
-
     print("Esecuzione completata.")
     if 'update_sales_continuation' in state: del state['update_sales_continuation']
     save_state(state)
