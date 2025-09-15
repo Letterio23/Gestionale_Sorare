@@ -59,7 +59,8 @@ OPTIMIZED_CARD_DETAILS_QUERY = f"""
                     playerGameScores(last: 15) {{ score }}
                     activeInjuries {{ status, expectedEndDate }}
                     activeSuspensions {{ reason, endDate }}
-                    activeClub {{ name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
+                    activeClub {{ __typename, name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
+                    nationalTeam {{ __typename, name, upcomingGames(first: 1) {{ id, date, competition {{ displayName }}, homeTeam {{ ... on TeamInterface {{ name }} }}, awayTeam {{ ... on TeamInterface {{ name }} }} }} }}
                     u23Eligible
                     L_ANY: lowestPriceAnyCard(rarity: limited, inSeason: false) {{ {PRICE_FRAGMENT} }}
                     L_IN: lowestPriceAnyCard(rarity: limited, inSeason: true) {{ {PRICE_FRAGMENT} }}
@@ -189,16 +190,54 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
             end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00")).strftime('%d/%m/%y')
             record["Squalifica"] = f"{suspensions[0].get('reason', 'Squalificato')} fino al {end_date}"
     else: record["Squalifica"] = ""
-    club = player_info.get("activeClub")
-    if club and club.get("upcomingGames"):
-        game = club["upcomingGames"][0]
-        if game and game.get('date'):
-            game_date = datetime.fromisoformat(game['date'].replace("Z", "+00:00")).strftime('%d-%m-%y %H:%M')
-            home, away, comp = game.get("homeTeam", {}).get("name", ""), game.get("awayTeam", {}).get("name", ""), game.get("competition", {}).get("displayName", "")
-            record["Data Prossima Partita"], record["Next Game API ID"] = game_date, game.get("id", "")
-            record["Partita"] = f"🏠 vs {away} [{comp}]" if home == club.get("name") else f"✈️ vs {home} [{comp}]"
-        else: record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Data non disp.", "", ""
-    else: record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
+    # Logica per determinare la prossima partita (Club vs Nazionale)
+    club_game_list = player_info.get("activeClub", {}).get("upcomingGames", [])
+    national_team_info = player_info.get("nationalTeam")
+    national_game_list = national_team_info.get("upcomingGames", []) if national_team_info else []
+
+    club_game = club_game_list[0] if club_game_list else None
+    national_game = national_game_list[0] if national_game_list else None
+
+    next_game = None
+    team_context = None
+
+    if club_game and national_game:
+        club_date = datetime.fromisoformat(club_game['date'].replace("Z", "+00:00"))
+        national_date = datetime.fromisoformat(national_game['date'].replace("Z", "+00:00"))
+        if club_date < national_date:
+            next_game = club_game
+            team_context = player_info.get("activeClub")
+        else:
+            next_game = national_game
+            team_context = national_team_info
+    elif club_game:
+        next_game = club_game
+        team_context = player_info.get("activeClub")
+    elif national_game:
+        next_game = national_game
+        team_context = national_team_info
+
+    if next_game and team_context and next_game.get('date'):
+        game_date = datetime.fromisoformat(next_game['date'].replace("Z", "+00:00")).strftime('%d-%m-%y %H:%M')
+        home = next_game.get("homeTeam", {}).get("name", "")
+        away = next_game.get("awayTeam", {}).get("name", "")
+        comp = next_game.get("competition", {}).get("displayName", "")
+
+        record["Data Prossima Partita"] = game_date
+        record["Next Game API ID"] = next_game.get("id", "")
+
+        # Uso __typename per distinguere Club da NationalTeam
+        team_type = team_context.get("__typename", "")
+        team_name = team_context.get("name", "")
+
+        if "NationalTeam" in team_type:
+            record["Partita"] = f"🌍 {home} vs {away} [{comp}]"
+        elif home == team_name:
+            record["Partita"] = f"🏠 {home} vs {away} [{comp}]"
+        else:
+            record["Partita"] = f"✈️ {home} vs {away} [{comp}]"
+    else:
+        record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
     record["Ultimo Aggiornamento"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return [record.get(header, '') for header in MAIN_SHEET_HEADERS]
 def build_sales_history_row(name, slug, rarity, all_sales, headers):
