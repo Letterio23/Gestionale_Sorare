@@ -198,6 +198,39 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
     else: record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
     record["Ultimo Aggiornamento"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return [record.get(header, '') for header in MAIN_SHEET_HEADERS]
+def parse_price(price_val):
+    if price_val is None or price_val == '':
+        return None
+    price_str = str(price_val).strip()
+
+    # Check for non-numeric characters that are not separators
+    # This is a simple check; a more robust regex might be even better.
+    allowed_chars = "0123456789.,-"
+    if not all(char in allowed_chars for char in price_str):
+        # Attempt to strip non-standard currency symbols if any, like '€'
+        price_str = ''.join(filter(lambda x: x in allowed_chars, price_str))
+
+    has_comma = ',' in price_str
+    has_dot = '.' in price_str
+
+    # Handle formats like "1.234,56" (Italian) and "1,234.56" (English)
+    if has_comma and has_dot:
+        if price_str.rfind(',') > price_str.rfind('.'):
+            # Italian format: remove dots, replace comma with dot
+            price_str = price_str.replace('.', '').replace(',', '.')
+        else:
+            # English format: remove commas
+            price_str = price_str.replace(',', '')
+    elif has_comma:
+        # Only comma is present, assume it's a decimal separator e.g., "1234,56"
+        price_str = price_str.replace(',', '.')
+
+    try:
+        return float(price_str)
+    except (ValueError, TypeError):
+        # If everything fails, return None to indicate a parsing error
+        return None
+
 def build_sales_history_row(name, slug, rarity, all_sales, headers):
     now_ms = time.time() * 1000
     today_start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -432,9 +465,14 @@ def update_sales():
             for j in range(1, MAX_SALES_TO_DISPLAY + 1):
                 date_str, price_val = record.get(f"Sale {j} Date"), record.get(f"Sale {j} Price (EUR)")
                 if date_str and price_val:
-                    try:
-                        old_sales_from_sheet.append({"timestamp": datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000, "price": float(str(price_val).replace(",", ".")), "seasonEligibility": record.get(f"Sale {j} Eligibility")})
-                    except (ValueError, TypeError): continue
+                    price = parse_price(price_val)
+                    if price is not None:
+                        try:
+                            timestamp = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000
+                            eligibility = record.get(f"Sale {j} Eligibility")
+                            old_sales_from_sheet.append({"timestamp": timestamp, "price": price, "seasonEligibility": eligibility})
+                        except (ValueError, TypeError):
+                            continue # Skip if date is malformed
         combined_sales = sorted(list({int(s['timestamp']): s for s in old_sales_from_sheet + new_sales_from_api}.values()), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
         headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
         if not headers:
