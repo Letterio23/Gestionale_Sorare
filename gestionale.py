@@ -660,7 +660,6 @@ def create_so5_charts():
     chart_sheet.update_acell('C1', "Nota: I grafici sono immagini generate da QuickChart.io")
     spreadsheet.batch_update({
         "requests": [
-            {"updateSheetProperties": {"properties": {"sheetId": chart_sheet.id, "gridProperties": {"rowHeight": 25}}, "fields": "gridProperties.rowHeight"}},
             {"updateSheetProperties": {"properties": {"sheetId": chart_sheet.id, "gridProperties": {"frozenRowCount": 1}},"fields": "gridProperties.frozenRowCount"}},
             {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 200}}},
             {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 510}}},
