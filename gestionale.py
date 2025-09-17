@@ -560,30 +560,51 @@ def generate_chart_config(player_name, scores):
                 'label': 'SO5 Score',
                 'data': scores,
                 'backgroundColor': colors,
-                'borderColor': 'rgba(0, 0, 0, 0.2)',
-                'borderWidth': 1
+                'borderColor': 'rgba(0,0,0,0.3)',
+                'borderWidth': 1,
+                'barPercentage': 0.6,
+                'categoryPercentage': 0.7
             }]
         },
         'options': {
             'title': {
                 'display': True,
                 'text': player_name,
-                'fontSize': 16
+                'fontSize': 18,
+                'fontColor': '#333'
             },
             'legend': {
                 'display': False
+            },
+            'plugins': {
+                'datalabels': {
+                    'anchor': 'end',
+                    'align': 'top',
+                    'color': 'white',
+                    'font': {
+                        'weight': 'bold',
+                        'size': 14
+                    },
+                    'textStrokeColor': 'black',
+                    'textStrokeWidth': 2,
+                    'formatter': "(value) => { return Math.round(value); }"
+                }
             },
             'scales': {
                 'yAxes': [{
                     'ticks': {
                         'beginAtZero': True,
                         'max': 100,
-                        'stepSize': 10
+                        'stepSize': 20,
+                        'fontColor': '#555'
                     }
                 }],
                 'xAxes': [{
                     'gridLines': {
                         'display': False
+                    },
+                    'ticks': {
+                        'fontColor': '#555'
                     }
                 }]
             }
