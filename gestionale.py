@@ -634,9 +634,9 @@ def create_so5_charts():
                                     'startRowIndex': current_row, 'endRowIndex': current_row + len(reversed_scores),
                                     'startColumnIndex': 1, 'endColumnIndex': 2
                                 }]}},
-                                'colorStyle': {
-                                    'colors': colors
-                                }
+                                'styleOverrides': [
+                                    {'index': i, 'color': color} for i, color in enumerate(colors)
+                                ]
                             }],
                             'axis': [
                                 {'position': 'BOTTOM_AXIS', 'title': 'Partite (la più recente a destra)'},
