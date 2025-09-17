@@ -562,7 +562,7 @@ def create_so5_charts():
         print(f"Foglio '{CHART_SHEET_NAME}' creato.")
 
     # Clear existing charts from the sheet
-    sheet_metadata = spreadsheet.get(fields='sheets.charts,sheets.properties')
+    sheet_metadata = spreadsheet.fetch_sheet_metadata()
     chart_sheet_id = None
     for s in sheet_metadata.get('sheets', []):
         if s.get('properties', {}).get('title') == CHART_SHEET_NAME:
