@@ -23,6 +23,14 @@ MAX_SALES_FROM_API = 7
 INITIAL_SALES_FETCH_COUNT = 20
 CARD_DATA_UPDATE_INTERVAL_HOURS = 0.5
 MAIN_SHEET_HEADERS = ["Slug", "Rarity", "Player Name", "Player API Slug", "Position", "U23 Eligible?", "Livello", "In Season?", "XP Corrente", "XP Prox Livello", "XP Mancanti Livello", "Sale Price (EUR)", "FLOOR CLASSIC LIMITED", "FLOOR CLASSIC RARE", "FLOOR CLASSIC SR", "FLOOR IN SEASON LIMITED", "FLOOR IN SEASON RARE", "FLOOR IN SEASON SR", "L5 So5 (%)", "L15 So5 (%)", "Avg So5 Score (3)", "Avg So5 Score (5)", "Avg So5 Score (15)", "Last 5 SO5 Scores", "Partita", "Data Prossima Partita", "Next Game API ID", "Projection Grade", "Projected Score", "Projection Reliability (%)", "Starter Odds (%)", "Fee Abilitata?", "Infortunio", "Squalifica", "Ultimo Aggiornamento", "Owner Since", "Foto URL"]
+CHART_SHEET_NAME = "Grafici SO5"
+GRADIENT_STOPS = {
+    0: {'r': 255, 'g': 80, 'b': 80},      # Red
+    40: {'r': 255, 'g': 255, 'b': 0},   # Yellow
+    60: {'r': 37, 'g': 237, 'b': 54},   # Green
+    75: {'r': 0, 'g': 243, 'b': 235},   # Light Blue
+    100: {'r': 193, 'g': 229, 'b': 237} # Silver
+}
 # --- 2. QUERY GRAPHQL ---
 ALL_CARDS_QUERY = """
     query AllCardsFromUser($userSlug: String!, $rarities: [Rarity!], $cursor: String) {
@@ -230,6 +238,36 @@ def parse_price(price_val):
     except (ValueError, TypeError):
         # If everything fails, return None to indicate a parsing error
         return None
+
+def get_gradient_color(score):
+    """Calculates the color for a score based on a predefined gradient for Google Sheets API."""
+    if score is None:
+        return {'red': 0.8, 'green': 0.8, 'blue': 0.8}  # Grey for DNPs
+
+    score = max(0, min(100, float(score)))
+    sorted_stops = sorted(GRADIENT_STOPS.keys())
+
+    start_score, end_score = sorted_stops[0], sorted_stops[-1]
+    for i in range(len(sorted_stops) - 1):
+        if sorted_stops[i] <= score <= sorted_stops[i+1]:
+            start_score, end_score = sorted_stops[i], sorted_stops[i+1]
+            break
+
+    start_color, end_color = GRADIENT_STOPS[start_score], GRADIENT_STOPS[end_score]
+
+    if score == start_score:
+        return {'red': start_color['r']/255.0, 'green': start_color['g']/255.0, 'blue': start_color['b']/255.0}
+    if score == end_score:
+        return {'red': end_color['r']/255.0, 'green': end_color['g']/255.0, 'blue': end_color['b']/255.0}
+
+    score_range = float(end_score - start_score)
+    percentage = (score - start_score) / score_range if score_range > 0 else 0
+
+    r = start_color['r'] + (end_color['r'] - start_color['r']) * percentage
+    g = start_color['g'] + (end_color['g'] - start_color['g']) * percentage
+    b = start_color['b'] + (end_color['b'] - start_color['b']) * percentage
+
+    return {'red': r/255.0, 'green': g/255.0, 'blue': b/255.0}
 
 def build_sales_history_row(name, slug, rarity, all_sales, headers):
     now_ms = time.time() * 1000
@@ -503,6 +541,134 @@ def update_sales():
     send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata (GitHub)</b>\n\n⏱️ Tempo: {execution_time:.2f}s")
 def update_floors():
     pass
+
+def create_so5_charts():
+    """Creates a new sheet with SO5 score charts for each player."""
+    print("--- INIZIO CREAZIONE GRAFICI SO5 ---")
+    try:
+        credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
+        gc = gspread.service_account_from_dict(credentials)
+        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        main_sheet = spreadsheet.worksheet(MAIN_SHEET_NAME)
+    except Exception as e:
+        print(f"ERRORE CRITICO GSheets: {e}")
+        return
+
+    # Get or create the chart sheet
+    try:
+        chart_sheet = spreadsheet.worksheet(CHART_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        chart_sheet = spreadsheet.add_worksheet(title=CHART_SHEET_NAME, rows=1000, cols=30)
+        print(f"Foglio '{CHART_SHEET_NAME}' creato.")
+
+    # Clear existing charts from the sheet
+    sheet_metadata = spreadsheet.get(fields='sheets.charts,sheets.properties')
+    chart_sheet_id = None
+    for s in sheet_metadata.get('sheets', []):
+        if s.get('properties', {}).get('title') == CHART_SHEET_NAME:
+            chart_sheet_id = s.get('properties', {}).get('sheetId')
+            if 'charts' in s:
+                delete_requests = [{'deleteEmbeddedObject': {'objectId': chart['chartId']}} for chart in s['charts']]
+                if delete_requests:
+                    print(f"Rimozione di {len(delete_requests)} grafici esistenti...")
+                    spreadsheet.batch_update({'requests': delete_requests})
+            break
+
+    # Clear the sheet content
+    chart_sheet.clear()
+    print("Foglio dei grafici pulito.")
+
+    # Read player data from the main sheet
+    all_records = main_sheet.get_all_records()
+    players_with_scores = [r for r in all_records if r.get("Last 5 SO5 Scores", "").strip()]
+    if not players_with_scores:
+        print("Nessun giocatore con punteggi SO5 trovato.")
+        return
+
+    print(f"Trovati {len(players_with_scores)} giocatori con punteggi SO5.")
+
+    # Prepare data and build chart requests
+    requests = []
+    data_to_write = []
+    current_row = 1
+    chart_col = 3  # Start charts in column C
+
+    # Prepare all data to be written to the sheet
+    for player in players_with_scores:
+        scores_str = player.get("Last 5 SO5 Scores")
+        # Handle cases where score is 'DNP' or empty
+        scores = [s.strip() if s.strip().upper() != 'DNP' else '0' for s in scores_str.split(',') if s.strip()]
+        if not scores:
+            continue
+
+        # The API gives scores from most recent to least recent. We reverse for the chart.
+        reversed_scores = scores[::-1]
+        player_name = player.get("Player Name")
+
+        # Add player name and scores to the write buffer
+        data_to_write.append({'range': f'A{current_row}', 'values': [[player_name]]})
+        score_labels = [[f"G{i+1}"] for i in range(len(reversed_scores))]
+        score_values = [[s] for s in reversed_scores]
+        data_to_write.append({'range': f'A{current_row + 1}', 'values': score_labels})
+        data_to_write.append({'range': f'B{current_row + 1}', 'values': score_values})
+
+        # Build the chart request for this player
+        point_styles = [{'color': get_gradient_color(s)} for s in reversed_scores]
+
+        chart_request = {
+            'addChart': {
+                'chart': {
+                    'spec': {
+                        'title': player_name,
+                        'basicChart': {
+                            'chartType': 'COLUMN',
+                            'legendPosition': 'NONE',
+                            'domains': [{'domain': {'sourceRange': {'sources': [{
+                                'sheetId': chart_sheet_id,
+                                'startRowIndex': current_row, 'endRowIndex': current_row + len(reversed_scores),
+                                'startColumnIndex': 0, 'endColumnIndex': 1
+                            }]}}}],
+                            'series': [{
+                                'series': {'sourceRange': {'sources': [{
+                                    'sheetId': chart_sheet_id,
+                                    'startRowIndex': current_row, 'endRowIndex': current_row + len(reversed_scores),
+                                    'startColumnIndex': 1, 'endColumnIndex': 2
+                                }]}},
+                                'pointStyles': point_styles
+                            }],
+                            'axis': [
+                                {'position': 'BOTTOM_AXIS', 'title': 'Partite (la più recente a destra)'},
+                                {'position': 'LEFT_AXIS', 'title': 'Punteggio SO5', 'viewWindowOptions': {'min': 0, 'max': 100}}
+                            ],
+                            'headerCount': 1
+                        },
+                        'backgroundColor': {'red': 0.95, 'green': 0.95, 'blue': 0.95}
+                    },
+                    'position': {
+                        'overlayPosition': {
+                            'anchorCell': {'sheetId': chart_sheet_id, 'rowIndex': current_row - 1, 'columnIndex': chart_col - 1},
+                            'widthPixels': 550,
+                            'heightPixels': 350
+                        }
+                    }
+                }
+            }
+        }
+        requests.append(chart_request)
+        current_row += len(scores) + 2  # Move to the next position for the next player
+
+    # Batch write data and create charts
+    if data_to_write:
+        print(f"Scrittura dati per {len(players_with_scores)} giocatori...")
+        chart_sheet.batch_update(data_to_write, value_input_option='USER_ENTERED')
+
+    if requests:
+        print(f"Creazione di {len(requests)} grafici...")
+        spreadsheet.batch_update({'requests': requests})
+
+    print("--- CREAZIONE GRAFICI SO5 COMPLETATA ---")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         function_to_run = sys.argv[1]
@@ -510,6 +676,7 @@ if __name__ == "__main__":
         elif function_to_run == "update_cards": update_cards()
         elif function_to_run == "update_sales": update_sales()
         elif function_to_run == "update_floors": update_floors()
+        elif function_to_run == "create_charts": create_so5_charts()
         else: print(f"Errore: Funzione '{function_to_run}' non riconosciuta.")
     else:
-        print("Nessuna funzione specificata. Le funzioni disponibili sono: sync_galleria, update_cards, update_sales, update_floors.")
+        print("Nessuna funzione specificata. Le funzioni disponibili sono: sync_galleria, update_cards, update_sales, update_floors, create_charts.")
