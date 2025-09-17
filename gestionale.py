@@ -661,9 +661,9 @@ def create_so5_charts():
     spreadsheet.batch_update({
         "requests": [
             {"updateSheetProperties": {"properties": {"sheetId": chart_sheet.id, "gridProperties": {"frozenRowCount": 1}},"fields": "gridProperties.frozenRowCount"}},
-            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 200}}},
-            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 510}}},
-            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "ROWS", "startIndex": 1, "endIndex": len(players_with_scores) + 1}, "properties": {"pixelSize": 310}}},
+            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 200}, "fields": "pixelSize"}},
+            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 510}, "fields": "pixelSize"}},
+            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "ROWS", "startIndex": 1, "endIndex": len(players_with_scores) + 1}, "properties": {"pixelSize": 310}, "fields": "pixelSize"}},
         ]
     })
 
