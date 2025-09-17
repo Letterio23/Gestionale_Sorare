@@ -240,11 +240,15 @@ def parse_price(price_val):
         return None
 
 def get_gradient_color(score):
-    """Calculates the color for a score based on a predefined gradient for Google Sheets API."""
+    """Calculates the RGBA string for a score based on a predefined gradient for Chart.js."""
     if score is None:
-        return {'red': 0.8, 'green': 0.8, 'blue': 0.8}  # Grey for DNPs
+        return "rgba(200, 200, 200, 1)"  # Grey for DNPs
 
-    score = max(0, min(100, float(score)))
+    try:
+        score = max(0, min(100, float(score)))
+    except (ValueError, TypeError):
+        return "rgba(200, 200, 200, 1)"
+
     sorted_stops = sorted(GRADIENT_STOPS.keys())
 
     start_score, end_score = sorted_stops[0], sorted_stops[-1]
@@ -256,9 +260,9 @@ def get_gradient_color(score):
     start_color, end_color = GRADIENT_STOPS[start_score], GRADIENT_STOPS[end_score]
 
     if score == start_score:
-        return {'red': start_color['r']/255.0, 'green': start_color['g']/255.0, 'blue': start_color['b']/255.0}
+        return f"rgba({start_color['r']}, {start_color['g']}, {start_color['b']}, 1)"
     if score == end_score:
-        return {'red': end_color['r']/255.0, 'green': end_color['g']/255.0, 'blue': end_color['b']/255.0}
+        return f"rgba({end_color['r']}, {end_color['g']}, {end_color['b']}, 1)"
 
     score_range = float(end_score - start_score)
     percentage = (score - start_score) / score_range if score_range > 0 else 0
@@ -267,7 +271,7 @@ def get_gradient_color(score):
     g = start_color['g'] + (end_color['g'] - start_color['g']) * percentage
     b = start_color['b'] + (end_color['b'] - start_color['b']) * percentage
 
-    return {'red': r/255.0, 'green': g/255.0, 'blue': b/255.0}
+    return f"rgba({int(r)}, {int(g)}, {int(b)}, 1)"
 
 def build_sales_history_row(name, slug, rarity, all_sales, headers):
     now_ms = time.time() * 1000
@@ -542,9 +546,54 @@ def update_sales():
 def update_floors():
     pass
 
+import urllib.parse
+
+def generate_chart_config(player_name, scores):
+    """Generates a Chart.js configuration dictionary for a player's SO5 scores."""
+    colors = [get_gradient_color(s) for s in scores]
+
+    chart_config = {
+        'type': 'bar',
+        'data': {
+            'labels': [f'G{i+1}' for i in range(len(scores))],
+            'datasets': [{
+                'label': 'SO5 Score',
+                'data': scores,
+                'backgroundColor': colors,
+                'borderColor': 'rgba(0, 0, 0, 0.2)',
+                'borderWidth': 1
+            }]
+        },
+        'options': {
+            'title': {
+                'display': True,
+                'text': player_name,
+                'fontSize': 16
+            },
+            'legend': {
+                'display': False
+            },
+            'scales': {
+                'yAxes': [{
+                    'ticks': {
+                        'beginAtZero': True,
+                        'max': 100,
+                        'stepSize': 10
+                    }
+                }],
+                'xAxes': [{
+                    'gridLines': {
+                        'display': False
+                    }
+                }]
+            }
+        }
+    }
+    return chart_config
+
 def create_so5_charts():
-    """Creates a new sheet with SO5 score charts for each player."""
-    print("--- INIZIO CREAZIONE GRAFICI SO5 ---")
+    """Creates a new sheet with QuickChart.io chart images for each player."""
+    print("--- INIZIO CREAZIONE GRAFICI SO5 (QuickChart.io) ---")
     try:
         credentials = json.loads(GSPREAD_CREDENTIALS_JSON)
         gc = gspread.service_account_from_dict(credentials)
@@ -558,25 +607,13 @@ def create_so5_charts():
     try:
         chart_sheet = spreadsheet.worksheet(CHART_SHEET_NAME)
     except gspread.WorksheetNotFound:
-        chart_sheet = spreadsheet.add_worksheet(title=CHART_SHEET_NAME, rows=1000, cols=30)
+        chart_sheet = spreadsheet.add_worksheet(title=CHART_SHEET_NAME, rows=1000, cols=5)
         print(f"Foglio '{CHART_SHEET_NAME}' creato.")
 
-    # Clear existing charts from the sheet
-    sheet_metadata = spreadsheet.fetch_sheet_metadata()
-    chart_sheet_id = None
-    for s in sheet_metadata.get('sheets', []):
-        if s.get('properties', {}).get('title') == CHART_SHEET_NAME:
-            chart_sheet_id = s.get('properties', {}).get('sheetId')
-            if 'charts' in s:
-                delete_requests = [{'deleteEmbeddedObject': {'objectId': chart['chartId']}} for chart in s['charts']]
-                if delete_requests:
-                    print(f"Rimozione di {len(delete_requests)} grafici esistenti...")
-                    spreadsheet.batch_update({'requests': delete_requests})
-            break
-
-    # Clear the sheet content
     chart_sheet.clear()
-    print("Foglio dei grafici pulito.")
+    chart_sheet.update('A1:B1', [['Giocatore', 'Grafico Ultimi 5 Punteggi SO5']])
+    chart_sheet.format('A1:B1', {'textFormat': {'bold': True}})
+    print("Foglio dei grafici pulito e intestazioni scritte.")
 
     # Read player data from the main sheet
     all_records = main_sheet.get_all_records()
@@ -585,90 +622,53 @@ def create_so5_charts():
         print("Nessun giocatore con punteggi SO5 trovato.")
         return
 
-    print(f"Trovati {len(players_with_scores)} giocatori con punteggi SO5.")
+    print(f"Trovati {len(players_with_scores)} giocatori con punteggi SO5 da processare.")
 
-    # Prepare data and build chart requests
-    requests = []
-    data_to_write = []
-    current_row = 1
-    chart_col = 3  # Start charts in column C
-
-    # Prepare all data to be written to the sheet
-    for player in players_with_scores:
+    # Prepare data for batch update
+    update_data = []
+    for i, player in enumerate(players_with_scores):
         scores_str = player.get("Last 5 SO5 Scores")
-        # Handle cases where score is 'DNP' or empty
         scores = [s.strip() if s.strip().upper() != 'DNP' else '0' for s in scores_str.split(',') if s.strip()]
         if not scores:
             continue
 
-        # The API gives scores from most recent to least recent. We reverse for the chart.
-        reversed_scores = scores[::-1]
         player_name = player.get("Player Name")
+        # The API gives scores from most recent to least recent. We reverse for the chart to show recent on right.
+        reversed_scores = scores[::-1]
 
-        # Add player name and scores to the write buffer
-        data_to_write.append({'range': f'A{current_row}', 'values': [[player_name]]})
-        score_labels = [[f"G{i+1}"] for i in range(len(reversed_scores))]
-        score_values = [[s] for s in reversed_scores]
-        data_to_write.append({'range': f'A{current_row + 1}', 'values': score_labels})
-        data_to_write.append({'range': f'B{current_row + 1}', 'values': score_values})
+        # Generate chart config and URL
+        chart_config = generate_chart_config(player_name, reversed_scores)
+        config_str = json.dumps(chart_config, separators=(',', ':'))
+        encoded_config = urllib.parse.quote(config_str)
+        chart_url = f"https://quickchart.io/chart?w=500&h=300&bkg=white&c={encoded_config}"
 
-        # Build the chart request for this player
-        colors = [get_gradient_color(s) for s in reversed_scores]
+        # Create the formula for the image
+        image_formula = f'=IMAGE("{chart_url}")'
 
-        chart_request = {
-            'addChart': {
-                'chart': {
-                    'spec': {
-                        'title': player_name,
-                        'basicChart': {
-                            'chartType': 'COLUMN',
-                            'legendPosition': 'NO_LEGEND',
-                            'domains': [{'domain': {'sourceRange': {'sources': [{
-                                'sheetId': chart_sheet_id,
-                                'startRowIndex': current_row, 'endRowIndex': current_row + len(reversed_scores),
-                                'startColumnIndex': 0, 'endColumnIndex': 1
-                            }]}}}],
-                            'series': [{
-                                'series': {'sourceRange': {'sources': [{
-                                    'sheetId': chart_sheet_id,
-                                    'startRowIndex': current_row, 'endRowIndex': current_row + len(reversed_scores),
-                                    'startColumnIndex': 1, 'endColumnIndex': 2
-                                }]}},
-                                'styleOverrides': [
-                                    {'index': i, 'color': color} for i, color in enumerate(colors)
-                                ]
-                            }],
-                            'axis': [
-                                {'position': 'BOTTOM_AXIS', 'title': 'Partite (la più recente a destra)'},
-                                {'position': 'LEFT_AXIS', 'title': 'Punteggio SO5', 'viewWindowOptions': {'viewWindowMin': 0, 'viewWindowMax': 100}}
-                            ],
-                            'headerCount': 1
-                        },
-                        'backgroundColor': {'red': 0.95, 'green': 0.95, 'blue': 0.95}
-                    },
-                    'position': {
-                        'overlayPosition': {
-                            'anchorCell': {'sheetId': chart_sheet_id, 'rowIndex': current_row - 1, 'columnIndex': chart_col - 1},
-                            'widthPixels': 550,
-                            'heightPixels': 350
-                        }
-                    }
-                }
-            }
-        }
-        requests.append(chart_request)
-        current_row += len(scores) + 2  # Move to the next position for the next player
+        # Add player name and image formula to the update list
+        row_index = i + 2  # +2 because sheet is 1-indexed and we have a header
+        update_data.append({'range': f'A{row_index}', 'values': [[player_name]]})
+        update_data.append({'range': f'B{row_index}', 'values': [[image_formula]]})
 
-    # Batch write data and create charts
-    if data_to_write:
-        print(f"Scrittura dati per {len(players_with_scores)} giocatori...")
-        chart_sheet.batch_update(data_to_write, value_input_option='USER_ENTERED')
+    # Batch write all formulas to the sheet
+    if update_data:
+        print(f"Scrittura di {len(players_with_scores)} grafici nel foglio...")
+        chart_sheet.batch_update(update_data, value_input_option='USER_ENTERED')
 
-    if requests:
-        print(f"Creazione di {len(requests)} grafici...")
-        spreadsheet.batch_update({'requests': requests})
+    # Adjust column and row sizes
+    chart_sheet.set_frozen(rows=1)
+    chart_sheet.update_acell('C1', "Nota: I grafici sono immagini generate da QuickChart.io")
+    spreadsheet.batch_update({
+        "requests": [
+            {"updateSheetProperties": {"properties": {"sheetId": chart_sheet.id, "gridProperties": {"rowHeight": 25}}, "fields": "gridProperties.rowHeight"}},
+            {"updateSheetProperties": {"properties": {"sheetId": chart_sheet.id, "gridProperties": {"frozenRowCount": 1}},"fields": "gridProperties.frozenRowCount"}},
+            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 200}}},
+            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 510}}},
+            {"updateDimensionProperties": {"range": {"sheetId": chart_sheet.id, "dimension": "ROWS", "startIndex": 1, "endIndex": len(players_with_scores) + 1}, "properties": {"pixelSize": 310}}},
+        ]
+    })
 
-    print("--- CREAZIONE GRAFICI SO5 COMPLETATA ---")
+    print(f"--- CREAZIONE GRAFICI COMPLETATA. {len(players_with_scores)} grafici aggiunti a '{CHART_SHEET_NAME}'. ---")
 
 
 if __name__ == "__main__":
