@@ -613,7 +613,7 @@ def create_so5_charts():
         data_to_write.append({'range': f'B{current_row + 1}', 'values': score_values})
 
         # Build the chart request for this player
-        point_styles = [{'color': get_gradient_color(s)} for s in reversed_scores]
+        colors = [get_gradient_color(s) for s in reversed_scores]
 
         chart_request = {
             'addChart': {
@@ -622,7 +622,7 @@ def create_so5_charts():
                         'title': player_name,
                         'basicChart': {
                             'chartType': 'COLUMN',
-                            'legendPosition': 'NONE',
+                            'legendPosition': 'NO_LEGEND',
                             'domains': [{'domain': {'sourceRange': {'sources': [{
                                 'sheetId': chart_sheet_id,
                                 'startRowIndex': current_row, 'endRowIndex': current_row + len(reversed_scores),
@@ -634,11 +634,13 @@ def create_so5_charts():
                                     'startRowIndex': current_row, 'endRowIndex': current_row + len(reversed_scores),
                                     'startColumnIndex': 1, 'endColumnIndex': 2
                                 }]}},
-                                'pointStyles': point_styles
+                                'colorStyle': {
+                                    'colors': colors
+                                }
                             }],
                             'axis': [
                                 {'position': 'BOTTOM_AXIS', 'title': 'Partite (la più recente a destra)'},
-                                {'position': 'LEFT_AXIS', 'title': 'Punteggio SO5', 'viewWindowOptions': {'min': 0, 'max': 100}}
+                                {'position': 'LEFT_AXIS', 'title': 'Punteggio SO5', 'viewWindowOptions': {'viewWindowMin': 0, 'viewWindowMax': 100}}
                             ],
                             'headerCount': 1
                         },
