@@ -611,7 +611,7 @@ def create_so5_charts():
         print(f"Foglio '{CHART_SHEET_NAME}' creato.")
 
     chart_sheet.clear()
-    chart_sheet.update('A1:B1', [['Giocatore', 'Grafico Ultimi 5 Punteggi SO5']])
+    chart_sheet.update(range_name='A1:B1', values=[['Giocatore', 'Grafico Ultimi 5 Punteggi SO5']])
     chart_sheet.format('A1:B1', {'textFormat': {'bold': True}})
     print("Foglio dei grafici pulito e intestazioni scritte.")
 
@@ -656,7 +656,7 @@ def create_so5_charts():
         chart_sheet.batch_update(update_data, value_input_option='USER_ENTERED')
 
     # Adjust column and row sizes
-    chart_sheet.set_frozen(rows=1)
+    chart_sheet.freeze(rows=1)
     chart_sheet.update_acell('C1', "Nota: I grafici sono immagini generate da QuickChart.io")
     spreadsheet.batch_update({
         "requests": [
