@@ -22,7 +22,7 @@ MAX_SALES_TO_DISPLAY = 100
 MAX_SALES_FROM_API = 7
 INITIAL_SALES_FETCH_COUNT = 20
 CARD_DATA_UPDATE_INTERVAL_HOURS = 0.5
-MAIN_SHEET_HEADERS = ["Slug", "Rarity", "Player Name", "Player API Slug", "Position", "U23 Eligible?", "Livello", "In Season?", "XP Corrente", "XP Prox Livello", "XP Mancanti Livello", "Sale Price (EUR)", "FLOOR CLASSIC LIMITED", "FLOOR CLASSIC RARE", "FLOOR CLASSIC SR", "FLOOR IN SEASON LIMITED", "FLOOR IN SEASON RARE", "FLOOR IN SEASON SR", "L5 So5 (%)", "L15 So5 (%)", "Avg So5 Score (3)", "Avg So5 Score (5)", "Avg So5 Score (15)", "Last 5 SO5 Scores", "Partita", "Data Prossima Partita", "Next Game API ID", "Projection Grade", "Projected Score", "Projection Reliability (%)", "Starter Odds (%)", "Fee Abilitata?", "Infortunio", "Squalifica", "Ultimo Aggiornamento", "Owner Since", "Foto URL"]
+MAIN_SHEET_HEADERS = ["Slug", "Rarity", "Player Name", "Player API Slug", "Position", "U23 Eligible?", "Livello", "In Season?", "XP Corrente", "XP Prox Livello", "XP Mancanti Livello", "Sale Price (EUR)", "FLOOR CLASSIC LIMITED", "FLOOR CLASSIC RARE", "FLOOR CLASSIC SR", "FLOOR IN SEASON LIMITED", "FLOOR IN SEASON RARE", "FLOOR IN SEASON SR", "L5 So5 (%)", "L15 So5 (%)", "Avg So5 Score (3)", "Avg So5 Score (5)", "Avg So5 Score (15)", "Last 15 SO5 Scores", "Partita", "Data Prossima Partita", "Next Game API ID", "Projection Grade", "Projected Score", "Projection Reliability (%)", "Starter Odds (%)", "Fee Abilitata?", "Infortunio", "Squalifica", "Ultimo Aggiornamento", "Owner Since", "Foto URL"]
 CHART_SHEET_NAME = "Grafici SO5"
 GRADIENT_STOPS = {
     0: {'r': 255, 'g': 80, 'b': 80},      # Red
@@ -179,7 +179,7 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
         if len(scores) >= 3: record["Avg So5 Score (3)"] = round(sum(scores[:3]) / 3, 2)
         if len(scores) >= 5: record["Avg So5 Score (5)"] = round(sum(scores[:5]) / 5, 2)
         record["Avg So5 Score (15)"] = round(sum(scores) / len(scores), 2) if scores else ""
-        record["Last 5 SO5 Scores"] = ", ".join(map(str, scores[:5]))
+        record["Last 15 SO5 Scores"] = ", ".join(map(str, scores))
     injuries = player_info.get("activeInjuries", [])
     if injuries and injuries[0].get('expectedEndDate'):
         end_date_str = injuries[0]['expectedEndDate']
@@ -654,7 +654,7 @@ def create_so5_charts():
 
     # Read player data from the main sheet
     all_records = main_sheet.get_all_records()
-    players_with_scores = [r for r in all_records if r.get("Last 5 SO5 Scores", "").strip()]
+    players_with_scores = [r for r in all_records if r.get("Last 15 SO5 Scores", "").strip()]
     if not players_with_scores:
         print("Nessun giocatore con punteggi SO5 trovato.")
         return
@@ -664,7 +664,7 @@ def create_so5_charts():
     # Prepare data for batch update
     update_data = []
     for i, player in enumerate(players_with_scores):
-        scores_str = player.get("Last 5 SO5 Scores")
+        scores_str = player.get("Last 15 SO5 Scores")
         scores = [s.strip() if s.strip().upper() != 'DNP' else '0' for s in scores_str.split(',') if s.strip()]
         if not scores:
             continue
