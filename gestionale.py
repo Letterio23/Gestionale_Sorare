@@ -502,6 +502,18 @@ def update_sales():
     existing_sales_map = continuation_data.get('existing_sales_map', {})
     updates_to_batch = []
     new_rows_to_append = []
+
+    # Fetch headers once, before the loop
+    headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
+    if not headers:
+        headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
+        periods = [3, 7, 14, 30]
+        for p in periods: headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
+        for j in range(1, MAX_SALES_TO_DISPLAY + 1): headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
+        headers.append("Last Updated")
+        sales_sheet.update(range_name='A1', values=[headers])
+        print("Creati gli header per il foglio Cronologia Vendite.")
+
     for i in range(start_index, len(pairs_to_process)):
         if time.time() - start_time > 480: # Aumentato a 8 minuti per sicurezza
             print(f"Timeout imminente. Salvo stato all'indice {i}.")
@@ -536,15 +548,7 @@ def update_sales():
                         except (ValueError, TypeError):
                             continue # Skip if date is malformed
         combined_sales = sorted(list({int(s['timestamp']): s for s in old_sales_from_sheet + new_sales_from_api}.values()), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
-        headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
-        if not headers:
-             exp_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
-             periods = [3, 7, 14, 30]
-             for p in periods: exp_headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
-             for j in range(1, MAX_SALES_TO_DISPLAY + 1): exp_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
-             exp_headers.append("Last Updated")
-             sales_sheet.update('A1', [exp_headers])
-             headers = exp_headers
+
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
         if existing_info:
             updates_to_batch.append({'range': f'A{existing_info["row_index"]}', 'values': [updated_row]})
