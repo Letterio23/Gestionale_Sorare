@@ -552,10 +552,18 @@ def generate_chart_config(player_name, scores):
     """Generates a Chart.js configuration dictionary for a player's SO5 scores."""
     colors = [get_gradient_color(s) for s in scores]
 
+    # Generate descriptive labels
+    num_scores = len(scores)
+    labels = []
+    if num_scores > 0:
+        for i in range(num_scores - 1):
+            labels.append(f'{num_scores - i}° ultima')
+        labels.append('Recente')
+
     chart_config = {
         'type': 'bar',
         'data': {
-            'labels': [f'G{i+1}' for i in range(len(scores))],
+            'labels': labels,
             'datasets': [{
                 'label': 'SO5 Score',
                 'data': scores,
@@ -583,10 +591,10 @@ def generate_chart_config(player_name, scores):
                     'color': 'white',
                     'font': {
                         'weight': 'bold',
-                        'size': 14
+                        'size': 18
                     },
                     'textStrokeColor': 'black',
-                    'textStrokeWidth': 2,
+                    'textStrokeWidth': 4,
                     'formatter': "(value) => { return Math.round(value); }"
                 }
             },
@@ -661,15 +669,12 @@ def create_so5_charts():
         chart_config = generate_chart_config(player_name, reversed_scores)
         config_str = json.dumps(chart_config, separators=(',', ':'))
         encoded_config = urllib.parse.quote(config_str)
-        chart_url = f"https://quickchart.io/chart?w=500&h=300&bkg=white&c={encoded_config}"
+        chart_url = f"https://quickchart.io/chart?w=500&h=300&bkg=transparent&c={encoded_config}"
 
-        # Create the formula for the image
-        image_formula = f'=IMAGE("{chart_url}")'
-
-        # Add player name and image formula to the update list
+        # Add player name and the raw chart URL to the update list
         row_index = i + 2  # +2 because sheet is 1-indexed and we have a header
         update_data.append({'range': f'A{row_index}', 'values': [[player_name]]})
-        update_data.append({'range': f'B{row_index}', 'values': [[image_formula]]})
+        update_data.append({'range': f'B{row_index}', 'values': [[chart_url]]})
 
     # Batch write all formulas to the sheet
     if update_data:
