@@ -159,14 +159,25 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
     record["FLOOR IN SEASON RARE"] = calculate_eur_price(player_info.get('R_IN'), rates)
     record["FLOOR CLASSIC SR"] = calculate_eur_price(player_info.get('SR_ANY'), rates)
     record["FLOOR IN SEASON SR"] = calculate_eur_price(player_info.get('SR_IN'), rates)
+
+    # Set default projection values first
+    record["Projection Grade"] = "G"
+    record["Projected Score"] = ""
+    record["Projection Reliability (%)"] = ""
+    record["Starter Odds (%)"] = ""
+
+    # Overwrite with real data if it exists
     if projection_data:
         proj = projection_data.get('projection')
         if proj:
-            record["Projection Grade"], record["Projected Score"] = proj.get('grade', 'G'), proj.get('score')
-            if proj.get('reliabilityBasisPoints') is not None: record["Projection Reliability (%)"] = f"{int(proj['reliabilityBasisPoints'] / 100)}%"
+            record["Projection Grade"] = proj.get('grade') or "G"
+            record["Projected Score"] = proj.get('score') or ""
+            if proj.get('reliabilityBasisPoints') is not None:
+                record["Projection Reliability (%)"] = f"{int(proj['reliabilityBasisPoints'] / 100)}%"
         stats = projection_data.get('anyPlayerGameStats')
         if stats and stats.get('footballPlayingStatusOdds') and stats['footballPlayingStatusOdds'].get('starterOddsBasisPoints') is not None:
             record["Starter Odds (%)"] = f"{int(stats['footballPlayingStatusOdds']['starterOddsBasisPoints'] / 100)}%"
+
     record["Livello"], record["XP Corrente"], record["XP Prox Livello"] = card_details.get("grade"), card_details.get("xp"), card_details.get("xpNeededForNextGrade")
     if record["XP Prox Livello"] is not None and record["XP Corrente"] is not None: record["XP Mancanti Livello"] = record["XP Prox Livello"] - record["XP Corrente"]
     record["In Season?"], record["Fee Abilitata?"] = "Sì" if card_details.get("inSeasonEligible") else "No", "Sì" if card_details.get("secondaryMarketFeeEnabled") else "No"
