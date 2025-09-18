@@ -239,15 +239,20 @@ def parse_price(price_val):
         # If everything fails, return None to indicate a parsing error
         return None
 
+def get_contrast_color(r, g, b):
+    """Calculates whether black or white text has better contrast on an RGB background."""
+    luminance = (0.299 * r + 0.587 * g + 0.114 * b)
+    return 'black' if luminance > 160 else 'white'
+
 def get_gradient_color(score):
-    """Calculates the RGBA string for a score based on a predefined gradient for Chart.js."""
+    """Calculates the RGBA string and its best contrast color for a score."""
     if score is None:
-        return "rgba(200, 200, 200, 1)"  # Grey for DNPs
+        return ("rgba(200, 200, 200, 1)", "black")  # Grey for DNPs
 
     try:
         score = max(0, min(100, float(score)))
     except (ValueError, TypeError):
-        return "rgba(200, 200, 200, 1)"
+        return ("rgba(200, 200, 200, 1)", "black")
 
     sorted_stops = sorted(GRADIENT_STOPS.keys())
 
@@ -259,19 +264,23 @@ def get_gradient_color(score):
 
     start_color, end_color = GRADIENT_STOPS[start_score], GRADIENT_STOPS[end_score]
 
+    r, g, b = 0, 0, 0
     if score == start_score:
-        return f"rgba({start_color['r']}, {start_color['g']}, {start_color['b']}, 1)"
-    if score == end_score:
-        return f"rgba({end_color['r']}, {end_color['g']}, {end_color['b']}, 1)"
+        r, g, b = start_color['r'], start_color['g'], start_color['b']
+    elif score == end_score:
+        r, g, b = end_color['r'], end_color['g'], end_color['b']
+    else:
+        score_range = float(end_score - start_score)
+        percentage = (score - start_score) / score_range if score_range > 0 else 0
+        r = start_color['r'] + (end_color['r'] - start_color['r']) * percentage
+        g = start_color['g'] + (end_color['g'] - start_color['g']) * percentage
+        b = start_color['b'] + (end_color['b'] - start_color['b']) * percentage
 
-    score_range = float(end_score - start_score)
-    percentage = (score - start_score) / score_range if score_range > 0 else 0
+    r, g, b = int(r), int(g), int(b)
+    bg_color_str = f"rgba({r}, {g}, {b}, 1)"
+    text_color_str = get_contrast_color(r, g, b)
 
-    r = start_color['r'] + (end_color['r'] - start_color['r']) * percentage
-    g = start_color['g'] + (end_color['g'] - start_color['g']) * percentage
-    b = start_color['b'] + (end_color['b'] - start_color['b']) * percentage
-
-    return f"rgba({int(r)}, {int(g)}, {int(b)}, 1)"
+    return (bg_color_str, text_color_str)
 
 def build_sales_history_row(name, slug, rarity, all_sales, headers):
     now_ms = time.time() * 1000
@@ -550,7 +559,8 @@ import urllib.parse
 
 def generate_chart_config(player_name, scores):
     """Generates a Chart.js configuration dictionary for a player's SO5 scores."""
-    colors = [get_gradient_color(s) for s in scores]
+    # Unzip the generated color tuples into two separate lists
+    bg_colors, text_colors = zip(*[get_gradient_color(s) for s in scores])
 
     # Generate descriptive labels
     num_scores = len(scores)
@@ -567,7 +577,7 @@ def generate_chart_config(player_name, scores):
             'datasets': [{
                 'label': 'SO5 Score',
                 'data': scores,
-                'backgroundColor': colors,
+                'backgroundColor': list(bg_colors),
                 'borderColor': 'rgba(0,0,0,0.3)',
                 'borderWidth': 1,
                 'barPercentage': 0.6,
@@ -586,16 +596,14 @@ def generate_chart_config(player_name, scores):
             },
             'plugins': {
                 'datalabels': {
-                    'anchor': 'end',
-                    'align': 'top',
-                    'color': 'white',
+                    'anchor': 'center',
+                    'align': 'center',
+                    'color': list(text_colors),
                     'font': {
                         'weight': 'bold',
                         'size': 18
                     },
-                    'textStrokeColor': 'black',
-                    'textStrokeWidth': 4,
-                    'formatter': "(value) => { return Math.round(value); }"
+                    'formatter': "(value) => { return value == 0 ? '❌' : Math.round(value); }"
                 }
             },
             'scales': {
