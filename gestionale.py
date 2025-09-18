@@ -654,7 +654,9 @@ def create_so5_charts():
 
     # Read player data from the main sheet
     all_records = main_sheet.get_all_records()
-    players_with_scores = [r for r in all_records if r.get("Last 15 SO5 Scores", "").strip()]
+    players_with_scores = [
+        r for r in all_records if (r.get("Last 15 SO5 Scores", "") or r.get("Last 5 SO5 Scores", "")).strip()
+    ]
     if not players_with_scores:
         print("Nessun giocatore con punteggi SO5 trovato.")
         return
@@ -664,7 +666,8 @@ def create_so5_charts():
     # Prepare data for batch update
     update_data = []
     for i, player in enumerate(players_with_scores):
-        scores_str = player.get("Last 15 SO5 Scores")
+        # Check for new key first, then fall back to old key for backward compatibility
+        scores_str = player.get("Last 15 SO5 Scores") or player.get("Last 5 SO5 Scores")
         scores = [s.strip() if s.strip().upper() != 'DNP' else '0' for s in scores_str.split(',') if s.strip()]
         if not scores:
             continue
