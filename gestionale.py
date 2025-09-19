@@ -148,7 +148,8 @@ def calculate_eur_price(price_object, rates):
     except (TypeError, KeyError, IndexError, AttributeError, ValueError): return ""
 def fetch_projection(player_slug, game_id):
     if not player_slug or not game_id: return None
-    clean_game_id = str(game_id).replace("Game:", "")
+    # As per user feedback, the prefix to remove is "gameid:"
+    clean_game_id = str(game_id).replace("gameid:", "")
     data = sorare_graphql_fetch(PROJECTION_QUERY, {"playerSlug": player_slug, "gameId": clean_game_id})
     return data.get("data", {}).get("football", {}).get("player", {}).get("playerGameScore") if data else None
 def build_updated_card_row(original_record, card_details, player_info, projection_data, rates):
