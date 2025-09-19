@@ -62,6 +62,7 @@ OPTIMIZED_CARD_DETAILS_QUERY = f"""
                 liveSingleSaleOffer {{ receiverSide {{ amounts {{ eurCents, usdCents, gbpCents, wei, referenceCurrency }} }} }}
                 player {{
                     slug, displayName, position, lastFiveSo5Appearances, lastFifteenSo5Appearances
+                    nextSo5Fixture {{ game {{ id }} }}
                     playerGameScores(last: 15) {{ score }}
                     activeInjuries {{ status, expectedEndDate }}
                     activeSuspensions {{ reason, endDate }}
@@ -147,7 +148,8 @@ def calculate_eur_price(price_object, rates):
     except (TypeError, KeyError, IndexError, AttributeError, ValueError): return ""
 def fetch_projection(player_slug, game_id):
     if not player_slug or not game_id: return None
-    clean_game_id = str(game_id).replace("Game:", "")
+    # As per user feedback, the prefix to remove is "gameid:"
+    clean_game_id = str(game_id).replace("gameid:", "")
     data = sorare_graphql_fetch(PROJECTION_QUERY, {"playerSlug": player_slug, "gameId": clean_game_id})
     return data.get("data", {}).get("football", {}).get("player", {}).get("playerGameScore") if data else None
 def build_updated_card_row(original_record, card_details, player_info, projection_data, rates):
@@ -449,10 +451,12 @@ def update_cards():
         card_details = details_data["data"]["anyCard"]
         player_info = card_details.get("player")
         player_slug = player_info.get("slug") if player_info else None
-        upcoming_games = []
-        if player_info and player_info.get("activeClub"):
-            upcoming_games = player_info.get("activeClub", {}).get("upcomingGames", [])
-        game_id = upcoming_games[0].get("id") if upcoming_games else None
+
+        # Get game_id from the more reliable nextSo5Fixture
+        game_id = None
+        if player_info and player_info.get("nextSo5Fixture"):
+            game_id = player_info["nextSo5Fixture"].get("game", {}).get("id")
+
         projection_data = fetch_projection(player_slug, game_id)
         updated_row = build_updated_card_row(card_to_update, card_details, player_info, projection_data, rates)
         try:
