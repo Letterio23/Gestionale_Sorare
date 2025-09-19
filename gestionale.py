@@ -84,7 +84,11 @@ PROJECTION_QUERY = """
             player(slug: $playerSlug) {
                 playerGameScore(gameId: $gameId) {
                     projection { grade score reliabilityBasisPoints }
-                    anyPlayerGameStats { playingStatusOdds { starterOddsBasisPoints } }
+                    anyPlayerGameStats {
+                        ... on PlayerGameStats {
+                            footballPlayingStatusOdds { starterOddsBasisPoints }
+                        }
+                    }
                 }
             }
         }
@@ -159,8 +163,7 @@ def calculate_eur_price(price_object, rates):
     except (TypeError, KeyError, IndexError, AttributeError, ValueError): return ""
 def fetch_projection(player_slug, game_id):
     if not player_slug or not game_id: return None
-    # As per user feedback, the prefix to remove is "gameid:"
-    clean_game_id = str(game_id).replace("gameid:", "")
+    clean_game_id = str(game_id).replace("Game:", "")
     data = sorare_graphql_fetch(PROJECTION_QUERY, {"playerSlug": player_slug, "gameId": clean_game_id})
     return data.get("data", {}).get("football", {}).get("player", {}).get("playerGameScore") if data else None
 def build_updated_card_row(original_record, card_details, player_info, projection_data, rates):
@@ -188,8 +191,8 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
             if proj.get('reliabilityBasisPoints') is not None:
                 record["Projection Reliability (%)"] = f"{int(proj['reliabilityBasisPoints'] / 100)}%"
         stats = projection_data.get('anyPlayerGameStats')
-        if stats and stats.get('playingStatusOdds') and stats['playingStatusOdds'].get('starterOddsBasisPoints') is not None:
-            record["Starter Odds (%)"] = f"{int(stats['playingStatusOdds']['starterOddsBasisPoints'] / 100)}%"
+        if stats and stats.get('footballPlayingStatusOdds') and stats['footballPlayingStatusOdds'].get('starterOddsBasisPoints') is not None:
+            record["Starter Odds (%)"] = f"{int(stats['footballPlayingStatusOdds']['starterOddsBasisPoints'] / 100)}%"
 
     record["Livello"], record["XP Corrente"], record["XP Prox Livello"] = card_details.get("grade"), card_details.get("xp"), card_details.get("xpNeededForNextGrade")
     if record["XP Prox Livello"] is not None and record["XP Corrente"] is not None: record["XP Mancanti Livello"] = record["XP Prox Livello"] - record["XP Corrente"]
