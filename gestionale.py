@@ -103,12 +103,24 @@ def sorare_graphql_fetch(query, variables={}):
     headers = {"APIKEY": SORARE_API_KEY, "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9", "X-Sorare-ApiVersion": "v1"}
     try:
         response = requests.post(API_URL, json=payload, headers=headers, timeout=30)
+        if response.status_code == 422:
+            try:
+                error_details = response.json()
+                print(f"AVVISO: Dati non processabili per {variables}. Dettagli API: {error_details}")
+            except json.JSONDecodeError:
+                print(f"AVVISO: Dati non processabili per {variables}. Risposta non JSON: {response.text}")
+            return None
+
         response.raise_for_status()
         data = response.json()
-        if "errors" in data: print(f"ERRORE GraphQL per {variables}: {data['errors']}")
+        if "errors" in data:
+            print(f"ERRORE GraphQL per {variables}: {data['errors']}")
         return data
+    except requests.exceptions.HTTPError as e:
+        print(f"Errore HTTP: {e}")
+        return None
     except requests.exceptions.RequestException as e:
-        print(f"Errore di rete: {e}")
+        print(f"Errore di rete generico: {e}")
         return None
 def send_telegram_notification(text):
     if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]): return
