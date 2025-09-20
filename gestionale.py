@@ -6,6 +6,7 @@ import json
 import time
 from datetime import datetime, timedelta
 import gspread
+
 # --- 1. CONFIGURAZIONE ---
 SORARE_API_KEY = os.environ.get("SORARE_API_KEY")
 USER_SLUG = os.environ.get("USER_SLUG")
@@ -31,6 +32,7 @@ GRADIENT_STOPS = {
     75: {'r': 0, 'g': 243, 'b': 235},   # Light Blue
     100: {'r': 193, 'g': 229, 'b': 237} # Silver
 }
+
 # --- 2. QUERY GRAPHQL ---
 ALL_CARDS_QUERY = """
     query AllCardsFromUser($userSlug: String!, $rarities: [Rarity!], $cursor: String) {
@@ -42,6 +44,7 @@ ALL_CARDS_QUERY = """
         }
     }
 """
+
 PLAYER_TOKEN_PRICES_QUERY = """
     query GetPlayerTokenPrices($playerSlug: String!, $rarity: Rarity!, $limit: Int!) {
         tokens {
@@ -53,7 +56,9 @@ PLAYER_TOKEN_PRICES_QUERY = """
         }
     }
 """
+
 PRICE_FRAGMENT = "liveSingleSaleOffer { receiverSide { amounts { eurCents, usdCents, gbpCents, wei, referenceCurrency } } }"
+
 OPTIMIZED_CARD_DETAILS_QUERY = f"""
     query GetOptimizedCardDetails($cardSlug: String!) {{
         anyCard(slug: $cardSlug) {{
@@ -78,6 +83,7 @@ OPTIMIZED_CARD_DETAILS_QUERY = f"""
         }}
     }}
 """
+
 PROJECTION_QUERY = """
     query GetProjection($playerSlug: String!, $gameId: ID!) {
         football {
@@ -94,13 +100,19 @@ PROJECTION_QUERY = """
         }
     }
 """
+
 # --- 3. FUNZIONI HELPER ---
 def load_state():
     try:
-        with open(STATE_FILE, "r") as f: return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError): return {}
+        with open(STATE_FILE, "r") as f: 
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError): 
+        return {}
+
 def save_state(state_data):
-    with open(STATE_FILE, "w") as f: json.dump(state_data, f, indent=2)
+    with open(STATE_FILE, "w") as f: 
+        json.dump(state_data, f, indent=2)
+
 def sorare_graphql_fetch(query, variables={}):
     payload = {"query": query, "variables": variables}
     headers = {"APIKEY": SORARE_API_KEY, "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9", "X-Sorare-ApiVersion": "v1"}
@@ -113,7 +125,6 @@ def sorare_graphql_fetch(query, variables={}):
             except json.JSONDecodeError:
                 print(f"AVVISO: Dati non processabili per {variables}. Risposta non JSON: {response.text}")
             return None
-
         response.raise_for_status()
         data = response.json()
         if "errors" in data:
@@ -125,18 +136,25 @@ def sorare_graphql_fetch(query, variables={}):
     except requests.exceptions.RequestException as e:
         print(f"Errore di rete generico: {e}")
         return None
+
 def send_telegram_notification(text):
-    if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]): return
+    if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]): 
+        return
     api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-    try: requests.post(api_url, json=payload, timeout=10)
-    except Exception: pass
+    try: 
+        requests.post(api_url, json=payload, timeout=10)
+    except Exception: 
+        pass
+
 def get_eth_rate():
     try:
         response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=eur", timeout=5)
         response.raise_for_status()
         return response.json()["ethereum"]["eur"]
-    except Exception: return 3000.0
+    except Exception: 
+        return 3000.0
+
 def get_currency_rates():
     try:
         response = requests.get("https://api.exchangerate-api.com/v4/latest/EUR", timeout=5)
@@ -145,30 +163,42 @@ def get_currency_rates():
         return {'usd_to_eur': 1 / rates.get('USD', 1.08), 'gbp_to_eur': 1 / rates.get('GBP', 0.85)}
     except Exception:
         return {'usd_to_eur': 0.92, 'gbp_to_eur': 1.17}
+
 def calculate_eur_price(price_object, rates):
-    if not price_object or not rates: return ""
+    if not price_object or not rates: 
+        return ""
     try:
         amounts = price_object.get('liveSingleSaleOffer', {}).get('receiverSide', {}).get('amounts')
-        if not amounts: return ""
+        if not amounts: 
+            return ""
         amounts_data = amounts[0] if isinstance(amounts, list) else amounts
         currency = amounts_data.get('referenceCurrency', '').lower()
         euro_value = 0
-        if currency == 'eur': euro_value = amounts_data.get('eurCents', 0) / 100
-        elif currency == 'usd': euro_value = (amounts_data.get('usdCents', 0) / 100) * rates.get('usd_to_eur', 0.92)
-        elif currency == 'gbp': euro_value = (amounts_data.get('gbpCents', 0) / 100) * rates.get('gbp_to_eur', 1.17)
+        if currency == 'eur': 
+            euro_value = amounts_data.get('eurCents', 0) / 100
+        elif currency == 'usd': 
+            euro_value = (amounts_data.get('usdCents', 0) / 100) * rates.get('usd_to_eur', 0.92)
+        elif currency == 'gbp': 
+            euro_value = (amounts_data.get('gbpCents', 0) / 100) * rates.get('gbp_to_eur', 1.17)
         elif currency in ['eth', 'wei']:
             wei_value = amounts_data.get('wei')
-            if wei_value is not None: euro_value = (float(wei_value) / 1e18) * rates.get('eth_to_eur', 3000)
+            if wei_value is not None: 
+                euro_value = (float(wei_value) / 1e18) * rates.get('eth_to_eur', 3000)
         return round(euro_value, 2) if euro_value > 0 else ""
-    except (TypeError, KeyError, IndexError, AttributeError, ValueError): return ""
+    except (TypeError, KeyError, IndexError, AttributeError, ValueError): 
+        return ""
+
 def fetch_projection(player_slug, game_id):
-    if not player_slug or not game_id: return None
+    if not player_slug or not game_id: 
+        return None
     clean_game_id = str(game_id).replace("Game:", "")
     data = sorare_graphql_fetch(PROJECTION_QUERY, {"playerSlug": player_slug, "gameId": clean_game_id})
     return data.get("data", {}).get("football", {}).get("player", {}).get("playerGameScore") if data else None
+
 def build_updated_card_row(original_record, card_details, player_info, projection_data, rates):
     record = original_record.copy()
-    if not player_info: player_info = card_details.get("player", {})
+    if not player_info: 
+        player_info = card_details.get("player", {})
     record["FLOOR CLASSIC LIMITED"] = calculate_eur_price(player_info.get('L_ANY'), rates)
     record["FLOOR IN SEASON LIMITED"] = calculate_eur_price(player_info.get('L_IN'), rates)
     record["FLOOR CLASSIC RARE"] = calculate_eur_price(player_info.get('R_ANY'), rates)
@@ -195,16 +225,21 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
             record["Starter Odds (%)"] = f"{int(stats['footballPlayingStatusOdds']['starterOddsBasisPoints'] / 100)}%"
 
     record["Livello"], record["XP Corrente"], record["XP Prox Livello"] = card_details.get("grade"), card_details.get("xp"), card_details.get("xpNeededForNextGrade")
-    if record["XP Prox Livello"] is not None and record["XP Corrente"] is not None: record["XP Mancanti Livello"] = record["XP Prox Livello"] - record["XP Corrente"]
+    if record["XP Prox Livello"] is not None and record["XP Corrente"] is not None: 
+        record["XP Mancanti Livello"] = record["XP Prox Livello"] - record["XP Corrente"]
     record["In Season?"], record["Fee Abilitata?"] = "Sì" if card_details.get("inSeasonEligible") else "No", "Sì" if card_details.get("secondaryMarketFeeEnabled") else "No"
     record["Foto URL"], record["Sale Price (EUR)"] = card_details.get("pictureUrl", ""), calculate_eur_price(card_details, rates)
     l5, l15 = player_info.get('lastFiveSo5Appearances'), player_info.get('lastFifteenSo5Appearances')
-    if l5 is not None: record["L5 So5 (%)"] = f"{int((l5 / 5) * 100)}%"
-    if l15 is not None: record["L15 So5 (%)"] = f"{int((l15 / 15) * 100)}%"
+    if l5 is not None: 
+        record["L5 So5 (%)"] = f"{int((l5 / 5) * 100)}%"
+    if l15 is not None: 
+        record["L15 So5 (%)"] = f"{int((l15 / 15) * 100)}%"
     scores = [s.get('score') for s in player_info.get("playerGameScores", []) if s and s.get('score') is not None]
     if scores:
-        if len(scores) >= 3: record["Avg So5 Score (3)"] = round(sum(scores[:3]) / 3, 2)
-        if len(scores) >= 5: record["Avg So5 Score (5)"] = round(sum(scores[:5]) / 5, 2)
+        if len(scores) >= 3: 
+            record["Avg So5 Score (3)"] = round(sum(scores[:3]) / 3, 2)
+        if len(scores) >= 5: 
+            record["Avg So5 Score (5)"] = round(sum(scores[:5]) / 5, 2)
         record["Avg So5 Score (15)"] = round(sum(scores) / len(scores), 2) if scores else ""
         record["Last 15 SO5 Scores"] = ", ".join(map(str, scores))
     injuries = player_info.get("activeInjuries", [])
@@ -213,14 +248,16 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
         if end_date_str:
             end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00")).strftime('%d/%m/%y')
             record["Infortunio"] = f"{injuries[0].get('status', 'Infortunato')} fino al {end_date}"
-    else: record["Infortunio"] = ""
+    else: 
+        record["Infortunio"] = ""
     suspensions = player_info.get("activeSuspensions", [])
     if suspensions and suspensions[0].get('endDate'):
         end_date_str = suspensions[0]['endDate']
         if end_date_str:
             end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00")).strftime('%d/%m/%y')
             record["Squalifica"] = f"{suspensions[0].get('reason', 'Squalificato')} fino al {end_date}"
-    else: record["Squalifica"] = ""
+    else: 
+        record["Squalifica"] = ""
     club = player_info.get("activeClub")
     if club and club.get("upcomingGames"):
         game = club["upcomingGames"][0]
@@ -229,10 +266,13 @@ def build_updated_card_row(original_record, card_details, player_info, projectio
             home, away, comp = game.get("homeTeam", {}).get("name", ""), game.get("awayTeam", {}).get("name", ""), game.get("competition", {}).get("displayName", "")
             record["Data Prossima Partita"], record["Next Game API ID"] = game_date, game.get("id", "")
             record["Partita"] = f"🏠 vs {away} [{comp}]" if home == club.get("name") else f"✈️ vs {home} [{comp}]"
-        else: record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Data non disp.", "", ""
-    else: record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
+        else: 
+            record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Data non disp.", "", ""
+    else: 
+        record["Partita"], record["Data Prossima Partita"], record["Next Game API ID"] = "Nessuna partita", "", ""
     record["Ultimo Aggiornamento"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return [record.get(header, '') for header in MAIN_SHEET_HEADERS]
+
 def parse_price(price_val):
     if price_val is None or price_val == '':
         return None
@@ -321,8 +361,10 @@ def build_sales_history_row(name, slug, rarity, all_sales, headers):
         is_prices, cl_prices = [], []
         for s in all_sales:
             if s['timestamp'] >= now_ms - (p * 86400000):
-                if s['seasonEligibility'] == "IN_SEASON": is_prices.append(s['price'])
-                else: cl_prices.append(s['price'])
+                if s['seasonEligibility'] == "IN_SEASON": 
+                    is_prices.append(s['price'])
+                else: 
+                    cl_prices.append(s['price'])
         out_row_map[f"Avg Price {p}d (In-Season)"] = round(sum(is_prices)/len(is_prices), 2) if is_prices else ""
         out_row_map[f"Avg Price {p}d (Classic)"] = round(sum(cl_prices)/len(cl_prices), 2) if cl_prices else ""
     for j in range(MAX_SALES_TO_DISPLAY):
@@ -335,6 +377,7 @@ def build_sales_history_row(name, slug, rarity, all_sales, headers):
             out_row_map[f"Sale {j+1} Date"], out_row_map[f"Sale {j+1} Price (EUR)"], out_row_map[f"Sale {j+1} Eligibility"] = "", "", ""
     out_row_map["Last Updated"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return [out_row_map.get(h, '') for h in headers]
+
 # --- 4. FUNZIONI PRINCIPALI ---
 def sync_galleria():
     print("--- INIZIO SINCRONIZZAZIONE GALLERIA ---")
@@ -367,7 +410,8 @@ def sync_galleria():
         api_cards.extend(cards_data.get("nodes", []))
         page_info = cards_data.get("pageInfo", {})
         has_next_page, cursor = page_info.get("hasNextPage", False), page_info.get("endCursor")
-        if has_next_page: time.sleep(1)
+        if has_next_page: 
+            time.sleep(1)
     api_card_slugs = {card['slug'] for card in api_cards}
     print(f"Recupero completato. Trovate {len(api_card_slugs)} carte uniche in totale.")
     print("Leggo le carte presenti nel foglio Google...")
@@ -403,9 +447,10 @@ def sync_galleria():
         if data_to_write:
             print(f"Aggiunta di {len(data_to_write)} nuove carte al foglio...")
             sheet.append_rows(data_to_write, value_input_option='USER_ENTERED')
-    message = f"✅ <b>Sincronizzazione Galleria Completata</b>\n\nGalleria: {len(api_card_slugs)} carte\n➕ Aggiunte: {len(slugs_to_add)}\n➖ Rimosse: {len(slugs_to_delete)}"
+    message = f"✅ <b>Sincronizzazione Galleria Completata</b>\\n\\nGalleria: {len(api_card_slugs)} carte\\n➕ Aggiunte: {len(slugs_to_add)}\\n➖ Rimosse: {len(slugs_to_delete)}"
     print(message)
     send_telegram_notification(message)
+
 def update_cards():
     print("--- INIZIO AGGIORNAMENTO DATI CARTE (OTTIMIZZATO) ---")
     start_time, state = time.time(), load_state()
@@ -444,7 +489,8 @@ def update_cards():
         cards_to_process = continuation_data.get('cards_to_process', [])
     if not cards_to_process:
         print("Nessuna carta da aggiornare.")
-        if 'update_cards_continuation' in state: del state['update_cards_continuation']
+        if 'update_cards_continuation' in state: 
+            del state['update_cards_continuation']
         save_state(state)
         return
     for i in range(start_index, len(cards_to_process)):
@@ -456,7 +502,8 @@ def update_cards():
             return
         card_to_update = cards_to_process[i]
         card_slug = card_to_update.get('Slug')
-        if not card_slug: continue
+        if not card_slug: 
+            continue
         print(f"Aggiorno carta ({i+1}/{len(cards_to_process)}): {card_slug}")
         details_data = sorare_graphql_fetch(OPTIMIZED_CARD_DETAILS_QUERY, {"cardSlug": card_slug})
         if not details_data or not details_data.get("data", {}).get("anyCard"):
@@ -480,10 +527,12 @@ def update_cards():
             print(f"Errore aggiornamento riga per {card_slug}: {e}")
         time.sleep(1)
     print("Esecuzione completata. Pulizia dello stato.")
-    if 'update_cards_continuation' in state: del state['update_cards_continuation']
+    if 'update_cards_continuation' in state: 
+        del state['update_cards_continuation']
     save_state(state)
     execution_time = time.time() - start_time
-    send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\n\n⏱️ Tempo: {execution_time:.2f}s")
+    send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s")
+
 def update_sales():
     print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (MODALITÀ DATABASE) ---")
     start_time, state = time.time(), load_state()
@@ -509,7 +558,8 @@ def update_sales():
             slug, rarity = record.get("Player API Slug"), record.get("Rarity")
             if slug and rarity:
                 key = f"{slug}::{rarity.lower()}"
-                if key not in pairs_map: pairs_map[key] = {"slug": slug, "rarity": rarity.lower(), "name": record.get("Player Name")}
+                if key not in pairs_map: 
+                    pairs_map[key] = {"slug": slug, "rarity": rarity.lower(), "name": record.get("Player Name")}
         continuation_data['pairs_to_process'] = list(pairs_map.values())
         print("Leggo lo storico vendite esistente...")
         try:
@@ -522,56 +572,58 @@ def update_sales():
     updates_to_batch = []
     new_rows_to_append = []
 
-    # Fetch headers once, before the loop
     # CORREZIONE: Gestione sicura degli header per evitare duplicazioni
-expected_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
-periods = [3, 7, 14, 30]
-for p in periods: 
-    expected_headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
-for j in range(1, MAX_SALES_TO_DISPLAY + 1): 
-    expected_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
-expected_headers.append("Last Updated")
-
-# Ottieni gli header esistenti
-try:
-    existing_headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
-except:
-    existing_headers = []
-
-# Verifica se gli header devono essere aggiornati
-headers_need_update = False
-if not existing_headers:
-    print("Nessun header trovato. Creo nuovi header.")
-    headers_need_update = True
-elif len(existing_headers) != len(expected_headers):
-    print(f"Numero di colonne diverso: esistenti={len(existing_headers)}, attesi={len(expected_headers)}. Aggiorno header.")
-    headers_need_update = True
-elif existing_headers != expected_headers:
-    print("Header esistenti diversi da quelli attesi. Aggiorno header.")
-    headers_need_update = True
-
-# Aggiorna gli header solo se necessario
-if headers_need_update:
-    # Prima, salva tutti i dati esistenti per precauzione
+    expected_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
+    periods = [3, 7, 14, 30]
+    for p in periods: 
+        expected_headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
+    for j in range(1, MAX_SALES_TO_DISPLAY + 1): 
+        expected_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
+    expected_headers.append("Last Updated")
+    
+    # Ottieni gli header esistenti
     try:
-        existing_data = sales_sheet.get_all_values()
-        if len(existing_data) > 1:  # Se ci sono dati oltre agli header
-            print(f"Salvataggio di {len(existing_data)-1} righe di dati esistenti...")
+        existing_headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
     except:
-        existing_data = []
+        existing_headers = []
     
-    # Pulisci il foglio e scrivi i nuovi header
-    sales_sheet.clear()
-    sales_sheet.update(range_name='A1', values=[expected_headers])
+    # Verifica se gli header devono essere aggiornati
+    headers_need_update = False
+    if not existing_headers:
+        print("Nessun header trovato. Creo nuovi header.")
+        headers_need_update = True
+    elif len(existing_headers) != len(expected_headers):
+        print(f"Numero di colonne diverso: esistenti={len(existing_headers)}, attesi={len(expected_headers)}. Aggiorno header.")
+        headers_need_update = True
+    elif existing_headers != expected_headers:
+        print("Header esistenti diversi da quelli attesi. Aggiorno header.")
+        headers_need_update = True
     
-    # Se c'erano dati, avvisa l'utente
-    if len(existing_data) > 1:
-        print("⚠️  ATTENZIONE: Gli header sono stati modificati.")
-        print("Si consiglia di verificare manualmente i dati nel foglio 'Cronologia Vendite'.")
+    # Aggiorna gli header solo se necessario
+    if headers_need_update:
+        # Prima, salva tutti i dati esistenti per precauzione
+        try:
+            existing_data = sales_sheet.get_all_values()
+            if len(existing_data) > 1:  # Se ci sono dati oltre agli header
+                print(f"Salvataggio di {len(existing_data)-1} righe di dati esistenti...")
+        except:
+            existing_data = []
         
-    print("Header aggiornati nel foglio Cronologia Vendite.")
-else:
-    print("Header già corretti, nessun aggiornamento necessario.")
+        # Pulisci il foglio e scrivi i nuovi header
+        sales_sheet.clear()
+        sales_sheet.update(range_name='A1', values=[expected_headers])
+        
+        # Se c'erano dati, avvisa l'utente
+        if len(existing_data) > 1:
+            print("⚠️  ATTENZIONE: Gli header sono stati modificati.")
+            print("Si consiglia di verificare manualmente i dati nel foglio 'Cronologia Vendite'.")
+            
+        print("Header aggiornati nel foglio Cronologia Vendite.")
+    else:
+        print("Header già corretti, nessun aggiornamento necessario.")
+    
+    # Usa expected_headers per il resto della funzione
+    headers = expected_headers
 
     for i in range(start_index, len(pairs_to_process)):
         if time.time() - start_time > 480: # Aumentato a 8 minuti per sicurezza
@@ -579,8 +631,10 @@ else:
             continuation_data['last_index'] = i
             state['update_sales_continuation'] = continuation_data
             save_state(state)
-            if updates_to_batch: sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
-            if new_rows_to_append: sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
+            if updates_to_batch: 
+                sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
+            if new_rows_to_append: 
+                sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
             return
         pair = pairs_to_process[i]
         key = f"{pair['slug']}::{pair['rarity']}"
@@ -607,7 +661,6 @@ else:
                         except (ValueError, TypeError):
                             continue # Skip if date is malformed
         combined_sales = sorted(list({int(s['timestamp']): s for s in old_sales_from_sheet + new_sales_from_api}.values()), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
-
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
         if existing_info:
             updates_to_batch.append({'range': f'A{existing_info["row_index"]}', 'values': [updated_row]})
@@ -622,10 +675,12 @@ else:
         print(f"Aggiunta di {len(new_rows_to_append)} nuove righe a '{SALES_HISTORY_SHEET_NAME}'...")
         sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
     print("Esecuzione completata.")
-    if 'update_sales_continuation' in state: del state['update_sales_continuation']
+    if 'update_sales_continuation' in state: 
+        del state['update_sales_continuation']
     save_state(state)
     execution_time = time.time() - start_time
-    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata (GitHub)</b>\n\n⏱️ Tempo: {execution_time:.2f}s")
+    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s")
+
 def update_floors():
     pass
 
@@ -780,15 +835,20 @@ def create_so5_charts():
 
     print(f"--- CREAZIONE GRAFICI COMPLETATA. {len(players_with_scores)} grafici aggiunti a '{CHART_SHEET_NAME}'. ---")
 
-
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         function_to_run = sys.argv[1]
-        if function_to_run == "sync_galleria": sync_galleria()
-        elif function_to_run == "update_cards": update_cards()
-        elif function_to_run == "update_sales": update_sales()
-        elif function_to_run == "update_floors": update_floors()
-        elif function_to_run == "create_charts": create_so5_charts()
-        else: print(f"Errore: Funzione '{function_to_run}' non riconosciuta.")
+        if function_to_run == "sync_galleria": 
+            sync_galleria()
+        elif function_to_run == "update_cards": 
+            update_cards()
+        elif function_to_run == "update_sales": 
+            update_sales()
+        elif function_to_run == "update_floors": 
+            update_floors()
+        elif function_to_run == "create_charts": 
+            create_so5_charts()
+        else: 
+            print(f"Errore: Funzione '{function_to_run}' non riconosciuta.")
     else:
         print("Nessuna funzione specificata. Le funzioni disponibili sono: sync_galleria, update_cards, update_sales, update_floors, create_charts.")
