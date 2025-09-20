@@ -546,10 +546,11 @@ def update_sales():
         try:
             sales_sheet = spreadsheet.worksheet(SALES_HISTORY_SHEET_NAME)
         except gspread.WorksheetNotFound:
-            sales_sheet = spreadsheet.add_worksheet(title=SALES_HISTORY_SHEET_NAME, rows="1", cols="1")
+            sales_sheet = None
     except Exception as e:
         print(f"ERRORE CRITICO GSheets: {e}")
         return
+    
     if start_index == 0:
         print("Avvio nuova sessione...")
         main_records = main_sheet.get_all_records()
@@ -561,18 +562,14 @@ def update_sales():
                 if key not in pairs_map: 
                     pairs_map[key] = {"slug": slug, "rarity": rarity.lower(), "name": record.get("Player Name")}
         continuation_data['pairs_to_process'] = list(pairs_map.values())
-        print("Leggo lo storico vendite esistente...")
-        try:
-            continuation_data['existing_sales_map'] = { f"{rec.get('Player API Slug')}::{rec.get('Rarity Searched')}": {"row_index": i + 2, "record": rec} for i, rec in enumerate(sales_sheet.get_all_records()) }
-        except gspread.exceptions.GSpreadException as e:
-            print(f"Attenzione: il foglio '{SALES_HISTORY_SHEET_NAME}' sembra vuoto o malformato. Verrà trattato come vuoto. Dettagli: {e}")
-            continuation_data['existing_sales_map'] = {}
+        continuation_data['existing_sales_map'] = {}  # Reset since we'll recreate the sheet
+    
     pairs_to_process = continuation_data.get('pairs_to_process', [])
     existing_sales_map = continuation_data.get('existing_sales_map', {})
     updates_to_batch = []
     new_rows_to_append = []
 
-    # CORREZIONE: Gestione sicura degli header per evitare duplicazioni e colonne vuote
+    # SOLUZIONE DEFINITIVA: Ricrea completamente il foglio
     expected_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
     periods = [3, 7, 14, 30]
     for p in periods: 
@@ -581,61 +578,37 @@ def update_sales():
         expected_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
     expected_headers.append("Last Updated")
     
-    # Ottieni gli header esistenti
-    try:
-        existing_headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
-    except:
-        existing_headers = []
+    num_expected_cols = len(expected_headers)
+    print(f"Colonne attese: {num_expected_cols}")
     
-    # Verifica se gli header devono essere aggiornati
-    headers_need_update = False
-    if not existing_headers:
-        print("Nessun header trovato. Creo nuovi header.")
-        headers_need_update = True
-    elif len(existing_headers) != len(expected_headers):
-        print(f"Numero di colonne diverso: esistenti={len(existing_headers)}, attesi={len(expected_headers)}. Aggiorno header.")
-        headers_need_update = True
-    elif existing_headers != expected_headers:
-        print("Header esistenti diversi da quelli attesi. Aggiorno header.")
-        headers_need_update = True
-    
-    # Aggiorna gli header solo se necessario
-    if headers_need_update:
-        # Prima, salva tutti i dati esistenti per precauzione
+    # Elimina il foglio esistente se presente
+    if sales_sheet:
+        print("Eliminazione del foglio 'Cronologia Vendite' esistente...")
         try:
-            existing_data = sales_sheet.get_all_values()
-            if len(existing_data) > 1:  # Se ci sono dati oltre agli header
-                print(f"Salvataggio di {len(existing_data)-1} righe di dati esistenti...")
-        except:
-            existing_data = []
-        
-        # CORREZIONE: Ridimensiona il foglio alle dimensioni corrette
-        num_expected_cols = len(expected_headers)
-        current_cols = sales_sheet.col_count
-        
-        print(f"Ridimensionamento foglio: da {current_cols} colonne a {num_expected_cols} colonne")
-        
-        # Ridimensiona il foglio alle dimensioni esatte necessarie
-        sales_sheet.resize(rows=1000, cols=num_expected_cols)
-        
-        # Pulisci il foglio e scrivi i nuovi header
-        sales_sheet.clear()
-        sales_sheet.update(range_name='A1', values=[expected_headers])
-        
-        # Formatta gli header in grassetto
-        header_range = f'A1:{chr(64 + num_expected_cols)}1'
-        sales_sheet.format(header_range, {'textFormat': {'bold': True}})
-        
-        # Se c'erano dati, avvisa l'utente
-        if len(existing_data) > 1:
-            print("⚠️  ATTENZIONE: Gli header sono stati modificati.")
-            print("Si consiglia di verificare manualmente i dati nel foglio 'Cronologia Vendite'.")
-            
-        print("Header aggiornati e foglio ridimensionato correttamente.")
-    else:
-        print("Header già corretti, nessun aggiornamento necessario.")
+            spreadsheet.del_worksheet(sales_sheet)
+            print("Foglio eliminato con successo.")
+        except Exception as e:
+            print(f"Errore durante l'eliminazione del foglio: {e}")
     
-    # Usa expected_headers per il resto della funzione
+    # Crea un nuovo foglio con le dimensioni esatte
+    print(f"Creazione nuovo foglio 'Cronologia Vendite' con {num_expected_cols} colonne esatte...")
+    sales_sheet = spreadsheet.add_worksheet(
+        title=SALES_HISTORY_SHEET_NAME, 
+        rows=1000, 
+        cols=num_expected_cols
+    )
+    
+    # Aggiungi gli header
+    sales_sheet.update(range_name='A1', values=[expected_headers])
+    
+    # Formatta gli header in grassetto
+    header_range = f'A1:{chr(64 + num_expected_cols)}1' if num_expected_cols <= 26 else f'A1:{chr(64 + (num_expected_cols-1)//26)}{chr(65 + ((num_expected_cols-1)%26))}1'
+    sales_sheet.format(header_range, {'textFormat': {'bold': True}})
+    
+    print(f"Nuovo foglio creato con successo. Dimensioni: 1000 righe x {num_expected_cols} colonne")
+    
+    # Reset della mappa esistente visto che il foglio è nuovo
+    existing_sales_map = {}
     headers = expected_headers
 
     for i in range(start_index, len(pairs_to_process)):
@@ -659,40 +632,25 @@ def update_sales():
         if api_data and api_data.get("data") and not api_data.get("errors"):
             for sale in api_data["data"].get("tokens", {}).get("tokenPrices", []):
                 new_sales_from_api.append({"timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000, "price": sale['amounts']['eurCents'] / 100, "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"})
-        old_sales_from_sheet = []
-        if existing_info:
-            record = existing_info['record']
-            for j in range(1, MAX_SALES_TO_DISPLAY + 1):
-                date_str, price_val = record.get(f"Sale {j} Date"), record.get(f"Sale {j} Price (EUR)")
-                if date_str and price_val:
-                    price = parse_price(price_val)
-                    if price is not None:
-                        try:
-                            timestamp = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000
-                            eligibility = record.get(f"Sale {j} Eligibility")
-                            old_sales_from_sheet.append({"timestamp": timestamp, "price": price, "seasonEligibility": eligibility})
-                        except (ValueError, TypeError):
-                            continue # Skip if date is malformed
+        old_sales_from_sheet = []  # Empty since we recreated the sheet
         combined_sales = sorted(list({int(s['timestamp']): s for s in old_sales_from_sheet + new_sales_from_api}.values()), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
-        if existing_info:
-            updates_to_batch.append({'range': f'A{existing_info["row_index"]}', 'values': [updated_row]})
-        else:
-            new_rows_to_append.append(updated_row)
-            existing_sales_map[key] = {'row_index': 'new'}
+        
+        # Since the sheet is new, everything goes to append
+        new_rows_to_append.append(updated_row)
+        existing_sales_map[key] = {'row_index': 'new'}
         time.sleep(1)
-    if updates_to_batch:
-        print(f"Invio {len(updates_to_batch)} aggiornamenti a '{SALES_HISTORY_SHEET_NAME}'...")
-        sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
+    
     if new_rows_to_append:
         print(f"Aggiunta di {len(new_rows_to_append)} nuove righe a '{SALES_HISTORY_SHEET_NAME}'...")
         sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
+    
     print("Esecuzione completata.")
     if 'update_sales_continuation' in state: 
         del state['update_sales_continuation']
     save_state(state)
     execution_time = time.time() - start_time
-    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s")
+    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 Foglio ricreato con {num_expected_cols} colonne esatte")
 
 def update_floors():
     pass
