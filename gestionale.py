@@ -726,7 +726,7 @@ def update_sales():
         existing_info = existing_sales_map.get(key)
         sales_to_fetch = MAX_SALES_FROM_API if existing_info else INITIAL_SALES_FETCH_COUNT
         
-        # Fetch nuove vendite dall'API
+        # Fetch nuove vendite dall'API (SEMPRE divise per 100)
         api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {
             "playerSlug": pair['slug'], 
             "rarity": pair['rarity'], 
@@ -736,27 +736,29 @@ def update_sales():
         new_sales_from_api = []
         if api_data and api_data.get("data") and not api_data.get("errors"):
             for sale in api_data["data"].get("tokens", {}).get("tokenPrices", []):
+                # CORREZIONE: Divide sempre per 100 i prezzi dall'API
                 new_sales_from_api.append({
                     "timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000, 
-                    "price": sale['amounts']['eurCents'] / 100, 
+                    "price": sale['amounts']['eurCents'] / 100,  # SEMPRE DIVISO PER 100
                     "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"
                 })
         
-        # Recupera vendite esistenti dal foglio (se presenti)
+        # Recupera vendite esistenti dal foglio (GIÀ in euro, NON dividere per 100)
         old_sales_from_sheet = []
         if existing_info:
             record = existing_info['record']
             for j in range(1, MAX_SALES_TO_DISPLAY + 1):
                 date_str, price_val = record.get(f"Sale {j} Date"), record.get(f"Sale {j} Price (EUR)")
                 if date_str and price_val:
-                    price = parse_price(price_val)
+                    price = parse_price(price_val)  # parse_price restituisce già il valore in euro
                     if price is not None:
                         try:
                             timestamp = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000
                             eligibility = record.get(f"Sale {j} Eligibility")
+                            # CORREZIONE: NON dividere per 100 i prezzi dal foglio - sono già in euro
                             old_sales_from_sheet.append({
                                 "timestamp": timestamp, 
-                                "price": price, 
+                                "price": price,  # GIÀ in euro, non dividere
                                 "seasonEligibility": eligibility
                             })
                         except (ValueError, TypeError):
