@@ -306,6 +306,33 @@ def parse_price(price_val):
         # If everything fails, return None to indicate a parsing error
         return None
 
+def smart_price_correction(sheet_price, api_prices):
+    """
+    CORREZIONE AUTOMATICA per prezzi corrotti nel foglio.
+    
+    Logica:
+    - Se il prezzo del foglio è >50x la media dei prezzi API recenti
+    - Allora probabilmente è in centesimi invece che in euro
+    - Dividilo per 100 automaticamente
+    """
+    if sheet_price is None or not api_prices:
+        return sheet_price
+    
+    # Calcola la media dei prezzi API più recenti (max 3)
+    recent_api_prices = [p for p in api_prices if p > 0][:3]
+    if not recent_api_prices:
+        return sheet_price
+    
+    avg_api_price = sum(recent_api_prices) / len(recent_api_prices)
+    
+    # Se il prezzo del foglio è sospettosamente alto (>50x la media API)
+    if sheet_price > avg_api_price * 50 and sheet_price > 10:  # Soglia minima 10 EUR
+        corrected_price = sheet_price / 100
+        print(f"    🔧 CORREZIONE AUTO: {sheet_price} EUR → {corrected_price} EUR (era {sheet_price/corrected_price:.0f}x troppo alto)")
+        return corrected_price
+    
+    return sheet_price
+
 def get_contrast_color(r, g, b):
     """Calculates whether black or white text has better contrast on an RGB background."""
     luminance = (0.299 * r + 0.587 * g + 0.114 * b)
@@ -576,7 +603,7 @@ def update_cards():
     send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s")
 
 def update_sales():
-    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (CACHE CORRETTA) ---")
+    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (CON CORREZIONE AUTOMATICA) ---")
     start_time, state = time.time(), load_state()
     continuation_data = state.get('update_sales_continuation', {})
     start_index = continuation_data.get('last_index', 0)
@@ -746,27 +773,34 @@ def update_sales():
                 if len(new_sales_from_api) <= 3:  # Debug log
                     print(f"  🆕 API (cache): {api_price_eur} EUR (da {sale['amounts']['eurCents']} cents)")
         
-        # Recupera vendite esistenti dal foglio (GIÀ in euro, NON dividere per 100)
+        # Recupera vendite esistenti dal foglio CON CORREZIONE AUTOMATICA
         old_sales_from_sheet = []
         if existing_info:
             record = existing_info['record']
             print(f"  📄 Leggo vendite esistenti dal foglio...")
+            
+            # Estrai i prezzi API per il confronto
+            api_prices_for_comparison = [s['price'] for s in new_sales_from_api]
+            
             for j in range(1, MAX_SALES_TO_DISPLAY + 1):
                 date_str, price_val = record.get(f"Sale {j} Date"), record.get(f"Sale {j} Price (EUR)")
                 if date_str and price_val:
-                    price = parse_price(price_val)  # parse_price restituisce già il valore in EUR
-                    if price is not None:
+                    raw_price = parse_price(price_val)  # parse_price restituisce il valore raw dal foglio
+                    if raw_price is not None:
+                        # CORREZIONE AUTOMATICA: Confronta con i prezzi API
+                        corrected_price = smart_price_correction(raw_price, api_prices_for_comparison)
+                        
                         try:
                             timestamp = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000
                             eligibility = record.get(f"Sale {j} Eligibility")
-                            # CORREZIONE CRITICA: NON dividere per 100 i prezzi dal foglio - sono già in euro
                             old_sales_from_sheet.append({
                                 "timestamp": timestamp, 
-                                "price": price,  # GIÀ in euro dal parse_price()
+                                "price": corrected_price,  # USA IL PREZZO CORRETTO
                                 "seasonEligibility": eligibility
                             })
                             if j <= 3:  # Debug log
-                                print(f"  📄 Foglio Sale {j}: {price} EUR")
+                                correction_note = " (corretto)" if corrected_price != raw_price else ""
+                                print(f"  📄 Foglio Sale {j}: {corrected_price} EUR{correction_note}")
                         except (ValueError, TypeError):
                             continue
         
@@ -802,14 +836,14 @@ def update_sales():
         sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
     
     # Cleanup
-    print("✅ Aggiornamento database completato con cache corretta!")
+    print("✅ Aggiornamento database completato con correzione automatica!")
     if 'update_sales_continuation' in state: 
         del state['update_sales_continuation']
     save_state(state)
     
     execution_time = time.time() - start_time
     recreation_msg = " (Foglio ricreato)" if sheet_needs_recreation else " (Database aggiornato)"
-    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata</b>{recreation_msg}\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 {len(pairs_to_process)} giocatori processati\\n🔧 Cache corretta applicata")
+    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata</b>{recreation_msg}\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 {len(pairs_to_process)} giocatori processati\\n🔧 Correzione automatica applicata")
 
 def update_floors():
     pass
