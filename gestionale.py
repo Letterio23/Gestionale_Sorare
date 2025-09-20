@@ -523,15 +523,55 @@ def update_sales():
     new_rows_to_append = []
 
     # Fetch headers once, before the loop
-    headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
-    if not headers:
-        headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
-        periods = [3, 7, 14, 30]
-        for p in periods: headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
-        for j in range(1, MAX_SALES_TO_DISPLAY + 1): headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
-        headers.append("Last Updated")
-        sales_sheet.update(range_name='A1', values=[headers])
-        print("Creati gli header per il foglio Cronologia Vendite.")
+    # CORREZIONE: Gestione sicura degli header per evitare duplicazioni
+expected_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
+periods = [3, 7, 14, 30]
+for p in periods: 
+    expected_headers.extend([f"Avg Price {p}d (In-Season)", f"Avg Price {p}d (Classic)"])
+for j in range(1, MAX_SALES_TO_DISPLAY + 1): 
+    expected_headers.extend([f"Sale {j} Date", f"Sale {j} Price (EUR)", f"Sale {j} Eligibility"])
+expected_headers.append("Last Updated")
+
+# Ottieni gli header esistenti
+try:
+    existing_headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
+except:
+    existing_headers = []
+
+# Verifica se gli header devono essere aggiornati
+headers_need_update = False
+if not existing_headers:
+    print("Nessun header trovato. Creo nuovi header.")
+    headers_need_update = True
+elif len(existing_headers) != len(expected_headers):
+    print(f"Numero di colonne diverso: esistenti={len(existing_headers)}, attesi={len(expected_headers)}. Aggiorno header.")
+    headers_need_update = True
+elif existing_headers != expected_headers:
+    print("Header esistenti diversi da quelli attesi. Aggiorno header.")
+    headers_need_update = True
+
+# Aggiorna gli header solo se necessario
+if headers_need_update:
+    # Prima, salva tutti i dati esistenti per precauzione
+    try:
+        existing_data = sales_sheet.get_all_values()
+        if len(existing_data) > 1:  # Se ci sono dati oltre agli header
+            print(f"Salvataggio di {len(existing_data)-1} righe di dati esistenti...")
+    except:
+        existing_data = []
+    
+    # Pulisci il foglio e scrivi i nuovi header
+    sales_sheet.clear()
+    sales_sheet.update(range_name='A1', values=[expected_headers])
+    
+    # Se c'erano dati, avvisa l'utente
+    if len(existing_data) > 1:
+        print("⚠️  ATTENZIONE: Gli header sono stati modificati.")
+        print("Si consiglia di verificare manualmente i dati nel foglio 'Cronologia Vendite'.")
+        
+    print("Header aggiornati nel foglio Cronologia Vendite.")
+else:
+    print("Header già corretti, nessun aggiornamento necessario.")
 
     for i in range(start_index, len(pairs_to_process)):
         if time.time() - start_time > 480: # Aumentato a 8 minuti per sicurezza
