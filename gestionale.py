@@ -576,7 +576,7 @@ def update_cards():
     send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s")
 
 def update_sales():
-    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (MODALITÀ DATABASE INTELLIGENTE) ---")
+    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (CACHE CORRETTA) ---")
     start_time, state = time.time(), load_state()
     continuation_data = state.get('update_sales_continuation', {})
     start_index = continuation_data.get('last_index', 0)
@@ -726,7 +726,7 @@ def update_sales():
         existing_info = existing_sales_map.get(key)
         sales_to_fetch = MAX_SALES_FROM_API if existing_info else INITIAL_SALES_FETCH_COUNT
         
-        # Fetch nuove vendite dall'API (SEMPRE divise per 100)
+        # Fetch nuove vendite dall'API
         api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {
             "playerSlug": pair['slug'], 
             "rarity": pair['rarity'], 
@@ -736,38 +736,47 @@ def update_sales():
         new_sales_from_api = []
         if api_data and api_data.get("data") and not api_data.get("errors"):
             for sale in api_data["data"].get("tokens", {}).get("tokenPrices", []):
-                # CORREZIONE: Divide sempre per 100 i prezzi dall'API
+                # CORREZIONE CRITICA BUG CACHE: SALVA SEMPRE IL PREZZO GIÀ CONVERTITO
+                api_price_eur = sale['amounts']['eurCents'] / 100  # Convertito qui
                 new_sales_from_api.append({
                     "timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000, 
-                    "price": sale['amounts']['eurCents'] / 100,  # SEMPRE DIVISO PER 100
+                    "price": api_price_eur,  # SALVATO GIÀ IN EUR NELLA CACHE
                     "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"
                 })
+                if len(new_sales_from_api) <= 3:  # Debug log
+                    print(f"  🆕 API (cache): {api_price_eur} EUR (da {sale['amounts']['eurCents']} cents)")
         
         # Recupera vendite esistenti dal foglio (GIÀ in euro, NON dividere per 100)
         old_sales_from_sheet = []
         if existing_info:
             record = existing_info['record']
+            print(f"  📄 Leggo vendite esistenti dal foglio...")
             for j in range(1, MAX_SALES_TO_DISPLAY + 1):
                 date_str, price_val = record.get(f"Sale {j} Date"), record.get(f"Sale {j} Price (EUR)")
                 if date_str and price_val:
-                    price = parse_price(price_val)  # parse_price restituisce già il valore in euro
+                    price = parse_price(price_val)  # parse_price restituisce già il valore in EUR
                     if price is not None:
                         try:
                             timestamp = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000
                             eligibility = record.get(f"Sale {j} Eligibility")
-                            # CORREZIONE: NON dividere per 100 i prezzi dal foglio - sono già in euro
+                            # CORREZIONE CRITICA: NON dividere per 100 i prezzi dal foglio - sono già in euro
                             old_sales_from_sheet.append({
                                 "timestamp": timestamp, 
-                                "price": price,  # GIÀ in euro, non dividere
+                                "price": price,  # GIÀ in euro dal parse_price()
                                 "seasonEligibility": eligibility
                             })
+                            if j <= 3:  # Debug log
+                                print(f"  📄 Foglio Sale {j}: {price} EUR")
                         except (ValueError, TypeError):
                             continue
         
         # Combina e deduplica vendite
-        all_sales = old_sales_from_sheet + new_sales_from_api
+        print(f"  🔄 Combinazione: {len(new_sales_from_api)} nuove + {len(old_sales_from_sheet)} esistenti")
+        all_sales = new_sales_from_api + old_sales_from_sheet
         unique_sales = {int(s['timestamp']): s for s in all_sales}  # Dedup by timestamp
         combined_sales = sorted(unique_sales.values(), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
+        
+        print(f"  ✅ Risultato finale: {len(combined_sales)} vendite uniche")
         
         # Crea riga aggiornata
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
@@ -793,14 +802,14 @@ def update_sales():
         sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
     
     # Cleanup
-    print("✅ Aggiornamento database completato!")
+    print("✅ Aggiornamento database completato con cache corretta!")
     if 'update_sales_continuation' in state: 
         del state['update_sales_continuation']
     save_state(state)
     
     execution_time = time.time() - start_time
     recreation_msg = " (Foglio ricreato)" if sheet_needs_recreation else " (Database aggiornato)"
-    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata</b>{recreation_msg}\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 {len(pairs_to_process)} giocatori processati")
+    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata</b>{recreation_msg}\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 {len(pairs_to_process)} giocatori processati\\n🔧 Cache corretta applicata")
 
 def update_floors():
     pass
