@@ -600,25 +600,39 @@ def update_sales():
         headers_need_update = True
     
     # Aggiorna gli header solo se necessario
-    if headers_need_update:
-        # Prima, salva tutti i dati esistenti per precauzione
-        try:
-            existing_data = sales_sheet.get_all_values()
-            if len(existing_data) > 1:  # Se ci sono dati oltre agli header
-                print(f"Salvataggio di {len(existing_data)-1} righe di dati esistenti...")
-        except:
-            existing_data = []
+if headers_need_update:
+    # Prima, salva tutti i dati esistenti per precauzione
+    try:
+        existing_data = sales_sheet.get_all_values()
+        if len(existing_data) > 1:  # Se ci sono dati oltre agli header
+            print(f"Salvataggio di {len(existing_data)-1} righe di dati esistenti...")
+    except:
+        existing_data = []
+    
+    # CORREZIONE: Ridimensiona il foglio alle dimensioni corrette
+    num_expected_cols = len(expected_headers)
+    current_cols = sales_sheet.col_count
+    
+    print(f"Ridimensionamento foglio: da {current_cols} colonne a {num_expected_cols} colonne")
+    
+    # Ridimensiona il foglio alle dimensioni esatte necessarie
+    sales_sheet.resize(rows=1000, cols=num_expected_cols)
+    
+    # Pulisci il foglio e scrivi i nuovi header
+    sales_sheet.clear()
+    sales_sheet.update(range_name='A1', values=[expected_headers])
+    
+    # Formatta gli header in grassetto
+    header_range = f'A1:{chr(64 + num_expected_cols)}1'
+    sales_sheet.format(header_range, {'textFormat': {'bold': True}})
+    
+    # Se c'erano dati, avvisa l'utente
+    if len(existing_data) > 1:
+        print("⚠️  ATTENZIONE: Gli header sono stati modificati.")
+        print("Si consiglia di verificare manualmente i dati nel foglio 'Cronologia Vendite'.")
         
-        # Pulisci il foglio e scrivi i nuovi header
-        sales_sheet.clear()
-        sales_sheet.update(range_name='A1', values=[expected_headers])
-        
-        # Se c'erano dati, avvisa l'utente
-        if len(existing_data) > 1:
-            print("⚠️  ATTENZIONE: Gli header sono stati modificati.")
-            print("Si consiglia di verificare manualmente i dati nel foglio 'Cronologia Vendite'.")
-            
-        print("Header aggiornati nel foglio Cronologia Vendite.")
+    print("Header aggiornati e foglio ridimensionato correttamente.")
+
     else:
         print("Header già corretti, nessun aggiornamento necessario.")
     
