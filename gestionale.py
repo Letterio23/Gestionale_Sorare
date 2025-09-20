@@ -378,6 +378,48 @@ def build_sales_history_row(name, slug, rarity, all_sales, headers):
     out_row_map["Last Updated"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return [out_row_map.get(h, '') for h in headers]
 
+def check_sheet_health(sales_sheet, expected_headers):
+    """
+    Controlla se il foglio ha problemi di header duplicati o colonne extra.
+    Ritorna (is_healthy, needs_recreation, error_message)
+    """
+    try:
+        # Prova a leggere gli header esistenti
+        existing_headers = sales_sheet.row_values(1) if sales_sheet.row_count > 0 else []
+        
+        # Controlla se possiamo leggere i record (test per header duplicati)
+        try:
+            test_records = sales_sheet.get_all_records()
+            print(f"Test lettura records: OK ({len(test_records)} righe)")
+        except Exception as e:
+            if "duplicates" in str(e).lower() or "header" in str(e).lower():
+                return False, True, f"Header duplicati/vuoti: {e}"
+            else:
+                return False, False, f"Errore generico lettura: {e}"
+        
+        # Controlla dimensioni
+        num_expected_cols = len(expected_headers)
+        current_cols = sales_sheet.col_count
+        
+        if current_cols > num_expected_cols:
+            print(f"AVVISO: Troppe colonne: {current_cols} vs {num_expected_cols} attese")
+            # Non è critico, può essere sistemato con resize
+        
+        # Controlla header consistency
+        if len(existing_headers) != len(expected_headers):
+            print(f"Header count mismatch: {len(existing_headers)} vs {len(expected_headers)}")
+            return False, False, "Numero header diverso"
+        
+        if existing_headers != expected_headers:
+            print("Header content mismatch")
+            return False, False, "Contenuto header diverso"
+        
+        # Tutto OK
+        return True, False, "Foglio sano"
+        
+    except Exception as e:
+        return False, True, f"Errore grave nel controllo: {e}"
+
 # --- 4. FUNZIONI PRINCIPALI ---
 def sync_galleria():
     print("--- INIZIO SINCRONIZZAZIONE GALLERIA ---")
@@ -534,7 +576,7 @@ def update_cards():
     send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s")
 
 def update_sales():
-    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (MODALITÀ DATABASE) ---")
+    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (MODALITÀ DATABASE INTELLIGENTE) ---")
     start_time, state = time.time(), load_state()
     continuation_data = state.get('update_sales_continuation', {})
     start_index = continuation_data.get('last_index', 0)
@@ -551,25 +593,7 @@ def update_sales():
         print(f"ERRORE CRITICO GSheets: {e}")
         return
     
-    if start_index == 0:
-        print("Avvio nuova sessione...")
-        main_records = main_sheet.get_all_records()
-        pairs_map = {}
-        for record in main_records:
-            slug, rarity = record.get("Player API Slug"), record.get("Rarity")
-            if slug and rarity:
-                key = f"{slug}::{rarity.lower()}"
-                if key not in pairs_map: 
-                    pairs_map[key] = {"slug": slug, "rarity": rarity.lower(), "name": record.get("Player Name")}
-        continuation_data['pairs_to_process'] = list(pairs_map.values())
-        continuation_data['existing_sales_map'] = {}  # Reset since we'll recreate the sheet
-    
-    pairs_to_process = continuation_data.get('pairs_to_process', [])
-    existing_sales_map = continuation_data.get('existing_sales_map', {})
-    updates_to_batch = []
-    new_rows_to_append = []
-
-    # SOLUZIONE DEFINITIVA: Ricrea completamente il foglio
+    # Prepara gli header attesi
     expected_headers = ["Player Name", "Player API Slug", "Rarity Searched", "Sales Today (In-Season)", "Sales Today (Classic)"]
     periods = [3, 7, 14, 30]
     for p in periods: 
@@ -581,39 +605,111 @@ def update_sales():
     num_expected_cols = len(expected_headers)
     print(f"Colonne attese: {num_expected_cols}")
     
-    # Elimina il foglio esistente se presente
-    if sales_sheet:
-        print("Eliminazione del foglio 'Cronologia Vendite' esistente...")
-        try:
-            spreadsheet.del_worksheet(sales_sheet)
-            print("Foglio eliminato con successo.")
-        except Exception as e:
-            print(f"Errore durante l'eliminazione del foglio: {e}")
+    # LOGICA INTELLIGENTE: Controlla salute del foglio
+    sheet_needs_recreation = False
     
-    # Crea un nuovo foglio con le dimensioni esatte
-    print(f"Creazione nuovo foglio 'Cronologia Vendite' con {num_expected_cols} colonne esatte...")
-    sales_sheet = spreadsheet.add_worksheet(
-        title=SALES_HISTORY_SHEET_NAME, 
-        rows=1000, 
-        cols=num_expected_cols
-    )
+    if sales_sheet is None:
+        print("Foglio non esistente. Sarà creato.")
+        sheet_needs_recreation = True
+    else:
+        print("Controllo salute del foglio esistente...")
+        is_healthy, needs_recreation, error_msg = check_sheet_health(sales_sheet, expected_headers)
+        print(f"Stato foglio: {error_msg}")
+        
+        if needs_recreation:
+            print("🚨 FOGLIO CORROTTO: Richiesta ricreazione completa")
+            sheet_needs_recreation = True
+        elif not is_healthy:
+            print("⚠️ FOGLIO SANO MA NON OTTIMALE: Sistemazione header/dimensioni")
+            # Prova a sistemare senza ricreare
+            try:
+                current_cols = sales_sheet.col_count
+                if current_cols != num_expected_cols:
+                    print(f"Ridimensionamento: {current_cols} -> {num_expected_cols} colonne")
+                    sales_sheet.resize(rows=max(1000, sales_sheet.row_count), cols=num_expected_cols)
+                
+                # Aggiorna header se necessario
+                sales_sheet.update(range_name='A1', values=[expected_headers])
+                header_range = f'A1:{chr(64 + min(num_expected_cols, 26))}1' if num_expected_cols <= 26 else f'A1:{chr(64 + (num_expected_cols-1)//26)}{chr(65 + ((num_expected_cols-1)%26))}1'
+                sales_sheet.format(header_range, {'textFormat': {'bold': True}})
+                print("✅ Foglio sistemato senza ricreazione")
+            except Exception as e:
+                print(f"❌ Sistemazione fallita: {e}. Procedo con ricreazione.")
+                sheet_needs_recreation = True
+        else:
+            print("✅ FOGLIO SANO: Uso logica database normale")
     
-    # Aggiungi gli header
-    sales_sheet.update(range_name='A1', values=[expected_headers])
+    # RICREAZIONE FOGLIO (solo se necessario)
+    if sheet_needs_recreation:
+        print("🔄 RICREAZIONE FOGLIO IN CORSO...")
+        
+        # Elimina foglio esistente se presente
+        if sales_sheet:
+            try:
+                spreadsheet.del_worksheet(sales_sheet)
+                print("Foglio eliminato.")
+            except Exception as e:
+                print(f"Errore eliminazione: {e}")
+        
+        # Crea nuovo foglio
+        sales_sheet = spreadsheet.add_worksheet(
+            title=SALES_HISTORY_SHEET_NAME, 
+            rows=1000, 
+            cols=num_expected_cols
+        )
+        
+        # Aggiungi header
+        sales_sheet.update(range_name='A1', values=[expected_headers])
+        header_range = f'A1:{chr(64 + min(num_expected_cols, 26))}1' if num_expected_cols <= 26 else f'A1:{chr(64 + (num_expected_cols-1)//26)}{chr(65 + ((num_expected_cols-1)%26))}1'
+        sales_sheet.format(header_range, {'textFormat': {'bold': True}})
+        
+        print(f"✅ Nuovo foglio creato: {num_expected_cols} colonne esatte")
+        
+        # Reset continuation data since sheet is new
+        continuation_data = {'pairs_to_process': [], 'existing_sales_map': {}, 'last_index': 0}
+        start_index = 0
     
-    # Formatta gli header in grassetto
-    header_range = f'A1:{chr(64 + num_expected_cols)}1' if num_expected_cols <= 26 else f'A1:{chr(64 + (num_expected_cols-1)//26)}{chr(65 + ((num_expected_cols-1)%26))}1'
-    sales_sheet.format(header_range, {'textFormat': {'bold': True}})
+    # LOGICA DATABASE NORMALE
+    if start_index == 0:
+        print("Preparazione dati per aggiornamento database...")
+        main_records = main_sheet.get_all_records()
+        pairs_map = {}
+        for record in main_records:
+            slug, rarity = record.get("Player API Slug"), record.get("Rarity")
+            if slug and rarity:
+                key = f"{slug}::{rarity.lower()}"
+                if key not in pairs_map: 
+                    pairs_map[key] = {"slug": slug, "rarity": rarity.lower(), "name": record.get("Player Name")}
+        continuation_data['pairs_to_process'] = list(pairs_map.values())
+        
+        # Leggi dati esistenti se il foglio non è stato ricreato
+        if not sheet_needs_recreation:
+            print("Lettura storico vendite esistente...")
+            try:
+                existing_records = sales_sheet.get_all_records()
+                continuation_data['existing_sales_map'] = { 
+                    f"{rec.get('Player API Slug')}::{rec.get('Rarity Searched')}": 
+                    {"row_index": i + 2, "record": rec} 
+                    for i, rec in enumerate(existing_records) 
+                }
+                print(f"Trovate {len(existing_records)} righe esistenti nel database")
+            except Exception as e:
+                print(f"Errore lettura storico: {e}")
+                continuation_data['existing_sales_map'] = {}
+        else:
+            continuation_data['existing_sales_map'] = {}
     
-    print(f"Nuovo foglio creato con successo. Dimensioni: 1000 righe x {num_expected_cols} colonne")
-    
-    # Reset della mappa esistente visto che il foglio è nuovo
-    existing_sales_map = {}
+    pairs_to_process = continuation_data.get('pairs_to_process', [])
+    existing_sales_map = continuation_data.get('existing_sales_map', {})
+    updates_to_batch = []
+    new_rows_to_append = []
     headers = expected_headers
 
+    print(f"Processamento: {len(pairs_to_process)} coppie giocatore-rarità")
+    
     for i in range(start_index, len(pairs_to_process)):
-        if time.time() - start_time > 480: # Aumentato a 8 minuti per sicurezza
-            print(f"Timeout imminente. Salvo stato all'indice {i}.")
+        if time.time() - start_time > 480: # 8 minuti timeout
+            print(f"⏰ Timeout imminente. Salvo stato all'indice {i}.")
             continuation_data['last_index'] = i
             state['update_sales_continuation'] = continuation_data
             save_state(state)
@@ -622,35 +718,87 @@ def update_sales():
             if new_rows_to_append: 
                 sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
             return
+        
         pair = pairs_to_process[i]
         key = f"{pair['slug']}::{pair['rarity']}"
-        print(f"Processo ({i+1}/{len(pairs_to_process)}): {key}")
+        print(f"📊 ({i+1}/{len(pairs_to_process)}): {pair['name']} ({pair['rarity']})")
+        
         existing_info = existing_sales_map.get(key)
         sales_to_fetch = MAX_SALES_FROM_API if existing_info else INITIAL_SALES_FETCH_COUNT
-        api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {"playerSlug": pair['slug'], "rarity": pair['rarity'], "limit": sales_to_fetch})
+        
+        # Fetch nuove vendite dall'API
+        api_data = sorare_graphql_fetch(PLAYER_TOKEN_PRICES_QUERY, {
+            "playerSlug": pair['slug'], 
+            "rarity": pair['rarity'], 
+            "limit": sales_to_fetch
+        })
+        
         new_sales_from_api = []
         if api_data and api_data.get("data") and not api_data.get("errors"):
             for sale in api_data["data"].get("tokens", {}).get("tokenPrices", []):
-                new_sales_from_api.append({"timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000, "price": sale['amounts']['eurCents'] / 100, "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"})
-        old_sales_from_sheet = []  # Empty since we recreated the sheet
-        combined_sales = sorted(list({int(s['timestamp']): s for s in old_sales_from_sheet + new_sales_from_api}.values()), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
+                new_sales_from_api.append({
+                    "timestamp": datetime.strptime(sale['date'], "%Y-%m-%dT%H:%M:%SZ").timestamp() * 1000, 
+                    "price": sale['amounts']['eurCents'] / 100, 
+                    "seasonEligibility": "IN_SEASON" if sale['card']['inSeasonEligible'] else "CLASSIC"
+                })
+        
+        # Recupera vendite esistenti dal foglio (se presenti)
+        old_sales_from_sheet = []
+        if existing_info:
+            record = existing_info['record']
+            for j in range(1, MAX_SALES_TO_DISPLAY + 1):
+                date_str, price_val = record.get(f"Sale {j} Date"), record.get(f"Sale {j} Price (EUR)")
+                if date_str and price_val:
+                    price = parse_price(price_val)
+                    if price is not None:
+                        try:
+                            timestamp = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp() * 1000
+                            eligibility = record.get(f"Sale {j} Eligibility")
+                            old_sales_from_sheet.append({
+                                "timestamp": timestamp, 
+                                "price": price, 
+                                "seasonEligibility": eligibility
+                            })
+                        except (ValueError, TypeError):
+                            continue
+        
+        # Combina e deduplica vendite
+        all_sales = old_sales_from_sheet + new_sales_from_api
+        unique_sales = {int(s['timestamp']): s for s in all_sales}  # Dedup by timestamp
+        combined_sales = sorted(unique_sales.values(), key=lambda x: x['timestamp'], reverse=True)[:MAX_SALES_TO_DISPLAY]
+        
+        # Crea riga aggiornata
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
         
-        # Since the sheet is new, everything goes to append
-        new_rows_to_append.append(updated_row)
-        existing_sales_map[key] = {'row_index': 'new'}
+        # Aggiungi all'aggiornamento o nuova riga
+        if existing_info:
+            updates_to_batch.append({'range': f'A{existing_info["row_index"]}', 'values': [updated_row]})
+        else:
+            new_rows_to_append.append(updated_row)
+            # Calcola la prossima row_index disponibile per future reference
+            next_row = len(existing_sales_map) + len(new_rows_to_append) + 2  # +1 for header, +1 for 1-based indexing
+            existing_sales_map[key] = {'row_index': next_row, 'record': {}}
+        
         time.sleep(1)
     
+    # Applica aggiornamenti
+    if updates_to_batch:
+        print(f"📝 Aggiornamento {len(updates_to_batch)} righe esistenti...")
+        sales_sheet.batch_update(updates_to_batch, value_input_option='USER_ENTERED')
+    
     if new_rows_to_append:
-        print(f"Aggiunta di {len(new_rows_to_append)} nuove righe a '{SALES_HISTORY_SHEET_NAME}'...")
+        print(f"➕ Aggiunta {len(new_rows_to_append)} nuove righe...")
         sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
     
-    print("Esecuzione completata.")
+    # Cleanup
+    print("✅ Aggiornamento database completato!")
     if 'update_sales_continuation' in state: 
         del state['update_sales_continuation']
     save_state(state)
+    
     execution_time = time.time() - start_time
-    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 Foglio ricreato con {num_expected_cols} colonne esatte")
+    recreation_msg = " (Foglio ricreato)" if sheet_needs_recreation else " (Database aggiornato)"
+    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata</b>{recreation_msg}\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 {len(pairs_to_process)} giocatori processati")
 
 def update_floors():
     pass
