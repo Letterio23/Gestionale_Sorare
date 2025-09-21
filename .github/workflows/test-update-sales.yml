@@ -1,0 +1,38 @@
+name: Test Update Sales Only
+
+on:
+  # Esecuzione manuale
+  workflow_dispatch:
+  
+  # Oppure su push (se vuoi che parta automaticamente)
+  # push:
+  #   branches: [ main ]
+
+jobs:
+  update_sales_test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests gspread
+    
+    - name: Run update_sales only
+      env:
+        SORARE_API_KEY: ${{ secrets.SORARE_API_KEY }}
+        USER_SLUG: ${{ secrets.USER_SLUG }}
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+        SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python gestionale.py update_sales
