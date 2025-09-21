@@ -1,3 +1,5 @@
+# SOLUZIONE 1: FORZA FORMATO STRINGA per risolvere il bug dei decimali
+
 # Importazioni necessari
 import os
 import sys
@@ -376,6 +378,23 @@ def get_gradient_color(score):
 
     return (bg_color_str, text_color_str)
 
+# 🚀 FUNZIONE MODIFICATA: Formattazione prezzi come stringhe
+def format_price_as_string(price):
+    """
+    SOLUZIONE 1: Converte un prezzo numerico in stringa formattata
+    per forzare Google Sheets a trattarlo come testo e preservare i decimali
+    """
+    if price is None or price == "" or price == 0:
+        return ""
+    
+    try:
+        # Converti il prezzo in float se non lo è già
+        price_float = float(price)
+        # Formatta con 2 decimali e aggiungi "EUR" per forzare il formato testo
+        return f"{price_float:.2f} EUR"
+    except (ValueError, TypeError):
+        return str(price)
+
 def build_sales_history_row(name, slug, rarity, all_sales, headers):
     now_ms = time.time() * 1000
     today_start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -392,13 +411,14 @@ def build_sales_history_row(name, slug, rarity, all_sales, headers):
                     is_prices.append(s['price'])
                 else: 
                     cl_prices.append(s['price'])
-        out_row_map[f"Avg Price {p}d (In-Season)"] = round(sum(is_prices)/len(is_prices), 2) if is_prices else ""
-        out_row_map[f"Avg Price {p}d (Classic)"] = round(sum(cl_prices)/len(cl_prices), 2) if cl_prices else ""
+        out_row_map[f"Avg Price {p}d (In-Season)"] = format_price_as_string(round(sum(is_prices)/len(is_prices), 2)) if is_prices else ""
+        out_row_map[f"Avg Price {p}d (Classic)"] = format_price_as_string(round(sum(cl_prices)/len(cl_prices), 2)) if cl_prices else ""
     for j in range(MAX_SALES_TO_DISPLAY):
         if j < len(all_sales):
             sale = all_sales[j]
             out_row_map[f"Sale {j+1} Date"] = datetime.fromtimestamp(sale['timestamp']/1000).strftime('%Y-%m-%d %H:%M:%S')
-            out_row_map[f"Sale {j+1} Price (EUR)"] = sale['price']
+            # 🚀 CORREZIONE CRITICA: Formatta il prezzo come stringa
+            out_row_map[f"Sale {j+1} Price (EUR)"] = format_price_as_string(sale['price'])
             out_row_map[f"Sale {j+1} Eligibility"] = sale['seasonEligibility']
         else:
             out_row_map[f"Sale {j+1} Date"], out_row_map[f"Sale {j+1} Price (EUR)"], out_row_map[f"Sale {j+1} Eligibility"] = "", "", ""
@@ -603,7 +623,7 @@ def update_cards():
     send_telegram_notification(f"✅ <b>Dati Carte Aggiornati (GitHub)</b>\\n\\n⏱️ Tempo: {execution_time:.2f}s")
 
 def update_sales():
-    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (CON CORREZIONE AUTOMATICA) ---")
+    print("--- INIZIO AGGIORNAMENTO CRONOLOGIA VENDITE (SOLUZIONE FORMATO STRINGA) ---")
     start_time, state = time.time(), load_state()
     continuation_data = state.get('update_sales_continuation', {})
     start_index = continuation_data.get('last_index', 0)
@@ -812,7 +832,7 @@ def update_sales():
         
         print(f"  ✅ Risultato finale: {len(combined_sales)} vendite uniche")
         
-        # Crea riga aggiornata
+        # 🚀 CREA RIGA AGGIORNATA CON FORMATTAZIONE STRINGA
         updated_row = build_sales_history_row(pair['name'], pair['slug'], pair['rarity'], combined_sales, headers)
         
         # Aggiungi all'aggiornamento o nuova riga
@@ -836,14 +856,14 @@ def update_sales():
         sales_sheet.append_rows(new_rows_to_append, value_input_option='USER_ENTERED')
     
     # Cleanup
-    print("✅ Aggiornamento database completato con correzione automatica!")
+    print("✅ Aggiornamento database completato con formato stringa forzato!")
     if 'update_sales_continuation' in state: 
         del state['update_sales_continuation']
     save_state(state)
     
     execution_time = time.time() - start_time
     recreation_msg = " (Foglio ricreato)" if sheet_needs_recreation else " (Database aggiornato)"
-    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata</b>{recreation_msg}\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 {len(pairs_to_process)} giocatori processati\\n🔧 Correzione automatica applicata")
+    send_telegram_notification(f"✅ <b>Cronologia Vendite Aggiornata</b>{recreation_msg}\\n\\n⏱️ Tempo: {execution_time:.2f}s\\n📊 {len(pairs_to_process)} giocatori processati\\n🚀 Formato stringa applicato")
 
 def update_floors():
     pass
