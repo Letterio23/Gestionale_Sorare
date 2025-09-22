@@ -3,7 +3,7 @@ name: Best SO5 XP Formation
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 12 * * *'  # Ogni giorno a mezzogiorno UTC (modifica se serve)
+    - cron: '0 12 * * *'  # Ogni giorno a mezzogiorno UTC, modifica se serve
 
 jobs:
   run-best-so5-xp:
@@ -25,7 +25,7 @@ jobs:
 
       - name: Run best_so5_x_xp script
         env:
-          GSPREADCREDENTIALSJSON: ${{ secrets.GSPREADCREDENTIALSJSON }}
-          SPREADSHEETID: ${{ secrets.SPREADSHEETID }}
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: |
           python best_so5_x_xp.py
