@@ -1,0 +1,31 @@
+name: Best SO5 XP Formation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 12 * * *'  # Ogni giorno a mezzogiorno UTC (modifica se serve)
+
+jobs:
+  run-best-so5-xp:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install gspread oauth2client
+
+      - name: Run best_so5_x_xp script
+        env:
+          GSPREADCREDENTIALSJSON: ${{ secrets.GSPREADCREDENTIALSJSON }}
+          SPREADSHEETID: ${{ secrets.SPREADSHEETID }}
+        run: |
+          python best_so5_x_xp.py
