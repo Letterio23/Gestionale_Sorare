@@ -55,20 +55,20 @@ def best_so5_x_xp(sheet, output_sheet_name="Formazione Best SO5 XP"):
 
 def main():
     scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
-    creds_json = os.environ.get("GSPREADCREDENTIALSJSON")
+    creds_json = os.environ.get("GSPREAD_CREDENTIALS")
     if not creds_json:
-        raise Exception("GSPREADCREDENTIALSJSON environment variable is not set")
+        raise Exception("GSPREAD_CREDENTIALS environment variable is not set")
 
     creds_dict = eval(creds_json)
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
 
-    spreadsheet_id = os.environ.get("SPREADSHEETID")
+    spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     if not spreadsheet_id:
-        raise Exception("SPREADSHEETID environment variable is not set")
+        raise Exception("SPREADSHEET_ID environment variable is not set")
 
     spreadsheet = client.open_by_key(spreadsheet_id)
-    main_sheet = spreadsheet.sheet1  # o usa il nome del foglio principale se diverso
+    main_sheet = spreadsheet.sheet1  # Usa il foglio principale o cambia nome se serve
 
     best_so5_x_xp(main_sheet)
 
